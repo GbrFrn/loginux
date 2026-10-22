@@ -1842,6 +1842,12 @@ fn style(ctx: &egui::Context) {
     });
 }
 
+/// The mark at 128 px. X11 shows it; on Wayland the desktop file's icon is used.
+fn window_icon() -> egui::IconData {
+    let (side, rgba) = crate::icon::rgba(8);
+    egui::IconData { rgba, width: side as u32, height: side as u32 }
+}
+
 pub fn run(device: Option<PathBuf>) -> Result<(), String> {
     engine::install_signal_handlers();
     let hosted = match ipc::request(&Request::Status) {
@@ -1857,6 +1863,7 @@ pub fn run(device: Option<PathBuf>) -> Result<(), String> {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!("Loginux \u{00b7} {}", layout::current().name))
             .with_app_id("loginux")
+            .with_icon(window_icon())
             .with_inner_size(Vec2::new(1360.0, 840.0) * zoom.unwrap_or(1.0))
             .with_min_inner_size([1120.0, 700.0]),
         ..Default::default()

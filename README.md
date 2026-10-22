@@ -18,8 +18,9 @@ repainting the keyboard by itself after an unplug and replug, live colour
 edits from the editor without visible flicker or lag, and the onboard lighting
 returning when the service stopped. A channel check of all 133 zones found
 every key and bar segment where the definition puts it; the 8 unknown zones
-lit nothing. Not yet observed: re-enumeration after a report-rate change, and
-whether the keyboard keeps a rate across a replug.
+lit nothing. Not yet observed: re-enumeration after a report-rate change,
+whether the keyboard keeps a rate across a replug, the tray icon, and an
+install from the package.
 [`research/`](research/README.md) records the evidence and its labels.
 
 ## Supported devices
@@ -59,20 +60,39 @@ has the evidence.
 
 ## Install
 
+### Arch Linux and CachyOS
+
+`packaging/aur/PKGBUILD` builds the package `loginux-git` from the latest
+commit. It installs `loginux`, the udev rule, the user service, a menu entry
+and the icons; pacman reloads udev, so the devices need no replug. Once the
+package is on the AUR, `paru -S loginux-git` (or `yay`) installs it; from this
+repository, `cd packaging/aur && makepkg -si` does. Then, as your user:
+
+```sh
+systemctl --user enable --now loginux.service    # or RUN AT LOGIN in the editor
+```
+
+### From source
+
 ```sh
 cargo build --release          # binary at target/release/loginux
 cargo install --path .         # or install it as ~/.cargo/bin/loginux
 ```
 
-The keyboard's HID++ interface needs a udev rule so your user can open it.
-The rule tags interface 2 only; the interfaces that carry keystrokes stay
-root-only.
+The device's HID++ interface needs a udev rule so your user can open it. The
+rule tags the HID++ interface only; the interfaces that carry keystrokes and
+mouse input stay root-only.
 
 ```sh
 sudo cp udev/70-loginux.rules /etc/udev/rules.d/
 sudo udevadm control --reload
 sudo udevadm trigger --subsystem-match=hidraw
 ```
+
+For a menu entry, copy `packaging/loginux.desktop` to
+`~/.local/share/applications/` and `icons/loginux.svg` to
+`~/.local/share/icons/hicolor/scalable/apps/`. The entry runs `loginux ui`,
+so `~/.cargo/bin` has to be on the desktop session's `PATH`.
 
 ## The editor
 
@@ -147,22 +167,36 @@ runs.
 
 ## Run at login
 
+The package installs the user service. From source, copy it first:
+
 ```sh
 mkdir -p ~/.config/systemd/user
 cp systemd/loginux.service ~/.config/systemd/user/
 systemctl --user daemon-reload
+```
+
+Then:
+
+```sh
 loginux use NAME                                  # the profile to keep
 systemctl --user enable --now loginux.service     # what RUN AT LOGIN does
 ```
 
-Enabling creates the link
-`~/.config/systemd/user/default.target.wants/loginux.service`, so `loginux run`
-starts at every login. The unit expects the binary at `~/.cargo/bin/loginux`;
-edit `ExecStart` if it lives elsewhere.
+Enabling makes `loginux run` start at every login. The copied unit expects the
+binary at `~/.cargo/bin/loginux`; edit `ExecStart` if it lives elsewhere.
 
 - Stop now, handing the lighting back: `systemctl --user stop loginux`
 - Stop at login: `systemctl --user disable --now loginux`
 - Logs: `journalctl --user -u loginux`
+
+## Tray icon
+
+While `loginux run` runs, Loginux shows a tray icon. It speaks the
+StatusNotifierItem protocol: KDE Plasma shows it, and GNOME does with the
+AppIndicator extension. The menu names the device and the profile in use,
+switches profiles (Onboard Lighting hands the lighting back), opens the editor
+(so does a left click), and Quit stops the service until the next login,
+handing the lighting back.
 
 ## Getting the onboard lighting back
 
@@ -204,6 +238,16 @@ socket there.
 - `~/.config/loginux/devices/*.toml`: your own device definitions; one with
   a built-in's ID replaces it
 - `$XDG_RUNTIME_DIR/loginux/`: lock, socket and claim record (cleared at logout)
+
+## Licence
+
+Loginux is licensed under either of the Apache License, Version 2.0
+(`LICENSE-APACHE`) or the MIT licence (`LICENSE-MIT`), at your option. The
+fonts in `fonts/`, and `src/pixelfont.rs`, which is generated from Silkscreen,
+stay under the SIL Open Font License 1.1.
+
+Unless you say otherwise, a contribution you submit for inclusion in Loginux is
+licensed as above, without any additional terms.
 
 ## Credits
 

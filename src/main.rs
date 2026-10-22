@@ -1,13 +1,15 @@
-//! loginux: per-key and light-bar RGB for the Logitech G316 X 98 on Linux.
+//! loginux: RGB lighting for Logitech HID++ keyboards and mice on Linux.
 
 mod device;
 mod effects;
 mod engine;
 mod hidpp;
+mod icon;
 mod ipc;
 mod layout;
 mod pixelfont;
 mod profile;
+mod tray;
 mod ui;
 
 use device::Keyboard;
@@ -17,7 +19,7 @@ use layout::{Kind, Model};
 use profile::{Profile, hex, parse_rgb};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -146,7 +148,10 @@ fn run(device: Option<PathBuf>, args: &mut Vec<String>) -> Result<(), String> {
         }
     };
     let opts = engine::Options { device, refresh: refresh.filter(|&s| s > 0.0).map(Duration::from_secs_f64) };
-    engine::run(opts, false, Arc::default(), lock)
+    // The tray's Quit sets `stop`; the engine then hands the lighting back and returns.
+    let stop = Arc::new(AtomicBool::new(false));
+    tray::spawn(stop.clone());
+    engine::run(opts, false, stop, lock)
 }
 
 fn describe(status: &Status) -> String {

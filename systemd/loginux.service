@@ -1,9 +1,10 @@
 [Unit]
-Description=Keep the Logitech G316 X 98 lighting profile applied
-Documentation=file://%h/loginux-re/README.md
+Description=Loginux: keep the chosen lighting profile applied, with a tray icon
+Documentation=https://github.com/GbrFrn/loginux
 
 [Service]
-# `cargo install --path .` puts the binary here; packages should point at /usr/bin/loginux.
+# `cargo install --path .` puts the binary here; the Arch package installs this
+# unit with /usr/bin/loginux instead.
 ExecStart=%h/.cargo/bin/loginux run
 Restart=on-failure
 RestartSec=3

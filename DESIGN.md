@@ -272,6 +272,9 @@ The board on a black body with 10pt padding, framed by a 2pt Rule outline set 8p
 ### Status Block
 An 8pt square (Observed Green when connected, Caution Amber for no engine, no access or errors, Label Grey otherwise) beside a Small-caps status word, then Archivo detail lines and the lighting action at the column's foot.
 
+### Mark
+A keycap with penguin eyes and beak, lit along its bottom edge: a 16 x 16 pixel grid in `icons/loginux.txt`, square-cornered like everything else. Ground keycap and pupils, Text eyes, a Caution Amber beak and a Signal Red edge row; outside the window those two hues are the mark's own colours, not signals. `tools/mkicon.py` draws the SVG and the PNGs at whole-number scales without smoothing; the window and tray icons are read from the same grid.
+
 ## Do's and Don'ts
 
 ### Do:

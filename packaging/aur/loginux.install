@@ -1,0 +1,10 @@
+post_install() {
+  echo '==> Loginux: to keep a profile applied and show the tray icon, run as your user'
+  echo '==>   systemctl --user enable --now loginux.service'
+  echo '==> or open Loginux from the application menu and click RUN AT LOGIN.'
+}
+
+post_upgrade() {
+  echo '==> Loginux: restart the service to run the new version:'
+  echo '==>   systemctl --user restart loginux.service'
+}

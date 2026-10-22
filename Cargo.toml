@@ -2,11 +2,13 @@
 name = "loginux"
 version = "0.1.0"
 edition = "2024"
-description = "Per-key RGB for Logitech HID++ devices on Linux"
+description = "RGB lighting for Logitech HID++ keyboards and mice on Linux"
+license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
 eframe = { version = "0.37", default-features = false, features = ["accesskit", "clipboard", "glow", "wayland", "x11"] }
+ksni = { version = "0.3.6", features = ["blocking"] }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

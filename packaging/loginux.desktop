@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Loginux
+GenericName=Device Lighting
+Comment=Per-key RGB lighting for Logitech keyboards and mice
+Exec=loginux ui
+Icon=loginux
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=RGB;LED;lighting;keyboard;mouse;Logitech;
+StartupNotify=true

@@ -1,0 +1,26 @@
+# The Loginux mark: a keycap with penguin eyes and beak, lit along its bottom
+# edge. 16 x 16, one character per pixel, '.' transparent. Palette lines name
+# a character and its colour, from DESIGN.md.
+#
+# tools/mkicon.py writes icons/loginux.svg and the PNG sizes from this file;
+# src/icon.rs reads it for the window and tray icons.
+K #0B0B0C  Ground: the keycap and the pupils
+W #EDEDED  Text: the eyes
+A #F2B84B  Caution Amber: the beak
+R #FF2E3F  Signal Red: the lit edge
+................
+.KKKKKKKKKKKKKK.
+.KKKKKKKKKKKKKK.
+.KKKKKKKKKKKKKK.
+.KKKKKKKKKKKKKK.
+.KKKWWKKKKWWKKK.
+.KKWWWWKKWWWWKK.
+.KKWWKWKKWKWWKK.
+.KKWWKWKKWKWWKK.
+.KKKWWKKKKWWKKK.
+.KKKKKAAAAKKKKK.
+.KKKKKKAAKKKKKK.
+.KKKKKKKKKKKKKK.
+.KKKKKKKKKKKKKK.
+.RRRRRRRRRRRRRR.
+................
