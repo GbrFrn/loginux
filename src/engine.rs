@@ -9,9 +9,9 @@
 //! other program, and loginux waits for an explicit take-over instead of
 //! overwriting it.
 
-use crate::device::Keyboard;
+use crate::device::{Event, Keyboard, RATES_HZ};
 use crate::hidpp::{self, Error};
-use crate::ipc::{self, Control, Device, Reply, Request, Status};
+use crate::ipc::{self, Control, Controls, Device, RateChange, Reply, Request, Status};
 use crate::layout::{self, Kind, Model};
 use crate::profile::{self, Profile, Rgb};
 use std::fs::{self, File, OpenOptions};
@@ -33,6 +33,13 @@ const TICK: Duration = Duration::from_millis(250);
 const CHECK_EVERY: Duration = Duration::from_secs(2);
 const LEASE: Duration = Duration::from_secs(10);
 const SETTLE: Duration = Duration::from_millis(50);
+const CONTROLS_EVERY: Duration = Duration::from_secs(10);
+/// A rate change that did not re-enumerate is read back after this long. On
+/// Windows the keyboard left the bus at the change itself (G HUB capture); the
+/// margin covers a slower drop, which has not been observed on Linux.
+const RATE_READBACK: Duration = Duration::from_secs(5);
+/// After this long without the keyboard, a rate change is reported as failed.
+const RATE_GIVE_UP: Duration = Duration::from_secs(20);
 
 pub fn install_signal_handlers() {
     extern "C" fn on_signal(_: libc::c_int) {
@@ -209,6 +216,42 @@ struct Link {
     conflict: Option<(u8, u8)>,
     next_check: Instant,
     next_refresh: Option<Instant>,
+    controls: Controls,
+    rates: Option<Rates>,
+    next_controls: Instant,
+}
+
+/// A report-rate write the user asked for, waiting for a readback.
+struct RatePending {
+    index: u8,
+    hz: u32,
+    sent: Instant,
+}
+
+/// An optional read: a missing or failing feature is "unknown", only a lost device is an error.
+fn optional<T>(read: Result<Option<T>, Error>) -> Result<Option<T>, Error> {
+    match read {
+        Err(e @ Error::Gone(_)) => Err(e),
+        Err(_) => Ok(None),
+        ok => ok,
+    }
+}
+
+/// Supported 0x8061 rate indices and the current one.
+pub type Rates = (Vec<u8>, u8);
+
+pub fn read_controls(kb: &mut Keyboard) -> Result<(Controls, Option<Rates>), Error> {
+    let brightness = optional(kb.brightness())?.map(|(now, max)| [now, max]);
+    let rates = optional(kb.report_rates())?;
+    let game_mode = optional(kb.game_mode())?;
+    let hz = |i: u8| RATES_HZ.get(usize::from(i)).copied();
+    let controls = Controls {
+        brightness,
+        report_rate: rates.as_ref().and_then(|(_, current)| hz(*current)),
+        report_rates: rates.as_ref().map(|(supported, _)| supported.iter().filter_map(|&i| hz(i)).collect()).unwrap_or_default(),
+        game_mode,
+    };
+    Ok((controls, rates))
 }
 
 struct Engine {
@@ -225,6 +268,8 @@ struct Engine {
     check: Option<(u8, Instant)>,
     take_over: bool,
     message: Option<String>,
+    rate_pending: Option<RatePending>,
+    rate_change: Option<RateChange>,
 }
 
 fn log(msg: &str) {
@@ -254,6 +299,8 @@ pub fn run(opts: Options, hosted: bool, stop: Arc<AtomicBool>, lock: Lock) -> Re
         check: None,
         take_over: false,
         message: None,
+        rate_pending: None,
+        rate_change: None,
     };
     log(&format!("engine started (pid {})", std::process::id()));
     while !stop.load(Ordering::SeqCst) && !STOP.load(Ordering::SeqCst) {
@@ -338,12 +385,64 @@ impl Engine {
                 }
                 Ok(())
             }
+            Request::SetReportRate { hz } => self.set_report_rate(hz),
         };
         self.tick();
         match result {
             Ok(()) => Reply::Ok(self.status()),
             Err(e) => Reply::Err(e),
         }
+    }
+
+    /// The one device-setting write: sent once, at the user's request. The keyboard
+    /// can re-enumerate before it replies, so completion is decided by a readback.
+    fn set_report_rate(&mut self, hz: u32) -> Result<(), String> {
+        if self.rate_pending.is_some() {
+            return Err("a report-rate change is already waiting for the keyboard".into());
+        }
+        let link = self.link.as_mut().ok_or("the keyboard is not connected")?;
+        let (supported, current) = link.rates.clone().ok_or("this keyboard does not report a report rate (0x8061)")?;
+        let index = RATES_HZ
+            .iter()
+            .position(|&r| r == hz)
+            .map(|i| i as u8)
+            .filter(|i| supported.contains(i))
+            .ok_or_else(|| format!("{hz} Hz is not a rate this keyboard reports"))?;
+        if index == current {
+            self.rate_change = Some(RateChange::Done { hz });
+            return Ok(());
+        }
+        log(&format!("changing the report rate to {hz} Hz at the user's request; the keyboard may reconnect"));
+        self.rate_change = Some(RateChange::Waiting { hz });
+        match link.kb.set_report_rate(index) {
+            // Answered, or gone before it could answer: decide by reading back.
+            Ok(()) | Err(Error::Gone(_)) | Err(Error::Timeout(_)) => {
+                self.rate_pending = Some(RatePending { index, hz, sent: Instant::now() });
+                Ok(())
+            }
+            Err(e) => {
+                let error = e.to_string();
+                self.rate_change = Some(RateChange::Failed { hz, error: error.clone() });
+                Err(error)
+            }
+        }
+    }
+
+    /// Settles a pending rate change against what the keyboard now reports.
+    fn rate_readback(&mut self, current: Option<u8>) {
+        let Some(p) = self.rate_pending.take() else { return };
+        self.rate_change = Some(match current {
+            Some(i) if i == p.index => {
+                log(&format!("report rate read back as {} Hz", p.hz));
+                RateChange::Done { hz: p.hz }
+            }
+            Some(i) => {
+                let got = RATES_HZ.get(usize::from(i)).map_or_else(|| format!("index {i}"), |r| format!("{r} Hz"));
+                log(&format!("report rate read back as {got}, not {} Hz", p.hz));
+                RateChange::Failed { hz: p.hz, error: format!("the keyboard reports {got}") }
+            }
+            None => RateChange::Failed { hz: p.hz, error: "the keyboard did not report its rate after the change".into() },
+        });
     }
 
     fn choose(&mut self, name: Option<String>) -> Result<(), String> {
@@ -372,11 +471,21 @@ impl Engine {
         if self.link.is_none() && now >= self.retry_at {
             self.connect();
         }
+        if self.link.is_none() && self.rate_pending.as_ref().is_some_and(|p| now - p.sent > RATE_GIVE_UP) {
+            let hz = self.rate_pending.take().map_or(0, |p| p.hz);
+            let error = format!("the keyboard did not come back within {} s; Loginux keeps looking for it", RATE_GIVE_UP.as_secs());
+            self.say(&format!("report-rate change to {hz} Hz: {error}"));
+            self.rate_change = Some(RateChange::Failed { hz, error });
+        }
         if self.link.is_some()
             && let Err(e) = self.step()
         {
             let gone = matches!(e, Error::Gone(_));
-            self.say(&e.to_string());
+            if gone && self.rate_pending.is_some() {
+                log("keyboard left the bus after the report-rate change; waiting for it to return");
+            } else {
+                self.say(&e.to_string());
+            }
             self.link = None; // closes the node; a claim stays recorded in the marker
             self.device = if gone { Device::Missing } else { Device::Failed { error: e.to_string() } };
             self.retry_at = now + if gone { Duration::from_millis(500) } else { Duration::from_secs(5) };
@@ -435,11 +544,12 @@ impl Engine {
             let layout = kb.layout_code()?;
             let zones = kb.zones()?;
             let statics = kb.static_effects()?;
-            Ok((kb, protocol, layout, zones, statics))
+            let (controls, rates) = read_controls(&mut kb)?;
+            Ok((kb, protocol, layout, zones, statics, controls, rates))
         });
         let now = Instant::now();
         match result {
-            Ok((kb, protocol, layout, zones, statics)) => {
+            Ok((kb, protocol, layout, zones, statics, controls, rates)) => {
                 let path = kb.path.display().to_string();
                 let model = kb.model;
                 log(&format!("{} connected on {path}: HID++ {}.{}, {} zones", model.name, protocol.0, protocol.1, zones.len()));
@@ -464,6 +574,7 @@ impl Engine {
                     zones: zones.clone(),
                 };
                 self.message = None;
+                let current = rates.as_ref().map(|r| r.1);
                 self.link = Some(Link {
                     kb,
                     zones,
@@ -472,7 +583,13 @@ impl Engine {
                     conflict: None,
                     next_check: now,
                     next_refresh: None,
+                    controls,
+                    rates,
+                    next_controls: now + CONTROLS_EVERY,
                 });
+                if self.rate_pending.is_some() {
+                    self.rate_readback(current);
+                }
             }
             Err(e) => {
                 self.device = match &e {
@@ -515,9 +632,27 @@ impl Engine {
         };
         let force = self.take_over;
         let refresh = self.opts.refresh;
-        let link = self.link.as_mut().expect("checked above");
-        link.kb.alive()?;
         let now = Instant::now();
+        {
+            let link = self.link.as_mut().expect("checked above");
+            link.kb.alive()?;
+            for event in link.kb.events() {
+                match event {
+                    Event::GameMode(on) => link.controls.game_mode = Some(on),
+                }
+            }
+            let readback_due = self.rate_pending.as_ref().is_some_and(|p| now - p.sent > RATE_READBACK);
+            if now >= link.next_controls || readback_due {
+                link.next_controls = now + CONTROLS_EVERY;
+                let (controls, rates) = read_controls(&mut link.kb)?;
+                let current = rates.as_ref().map(|r| r.1);
+                (link.controls, link.rates) = (controls, rates);
+                if readback_due {
+                    self.rate_readback(current); // the keyboard kept its connection through the change
+                }
+            }
+        }
+        let link = self.link.as_mut().expect("checked above");
 
         let Some((base, frame)) = desired else {
             if let Some(h) = link.held.take() {
@@ -609,6 +744,8 @@ impl Engine {
             message: self.message.clone(),
             pid: std::process::id(),
             hosted: self.hosted,
+            controls: self.link.as_ref().map(|l| l.controls.clone()),
+            rate_change: self.rate_change.clone(),
         }
     }
 

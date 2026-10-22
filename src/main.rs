@@ -11,7 +11,7 @@ mod ui;
 
 use device::Keyboard;
 use engine::{STOP, TakeError};
-use ipc::{Control, Device, Request, Status};
+use ipc::{Control, Controls, Device, RateChange, Request, Status};
 use layout::{Kind, Model};
 use profile::{Profile, hex, parse_rgb};
 use std::path::PathBuf;
@@ -35,6 +35,7 @@ Usage:
   loginux paint ZONE=RRGGBB... [--base RRGGBB] [--hold SECS | --keep]
                                   paint keys (esc, f1, kp5, leftshift), bar1..bar30 or zone IDs
   loginux release                    hand the lighting back to the keyboard's onboard effects
+  loginux rate [HZ]                  show the report rate, or change it (the keyboard reconnects)
   loginux probe --device /dev/hidrawN
                                   read-only: print a starting definition for a new keyboard
 
@@ -54,6 +55,10 @@ fn main() -> ExitCode {
     let result = take_value(&mut args, "--device").and_then(|device| {
         let device = device.map(PathBuf::from);
         let command = if args.is_empty() { "ui".to_string() } else { args.remove(0) };
+        if matches!(command.as_str(), "zones" | "status" | "probe") {
+            // SAFETY: restores the default action before any thread exists; `loginux zones | head` then just ends.
+            unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+        }
         match command.as_str() {
             "ui" => no_more(&args).and_then(|_| ui::run(device)),
             "run" => run(device, &mut args),
@@ -63,6 +68,7 @@ fn main() -> ExitCode {
             "apply" | "paint" => paint(device, &command, &mut args),
             "release" => no_more(&args).and_then(|_| release(device)),
             "probe" => no_more(&args).and_then(|_| probe(device)),
+            "rate" => rate(device, &args),
             other => Err(format!("unknown command {other:?}\n\n{USAGE}")),
         }
     });
@@ -164,10 +170,28 @@ fn describe(status: &Status) -> String {
         status.active.as_deref().unwrap_or("none"),
         status.pid
     );
+    if let Some(c) = &status.controls {
+        out += &controls_text(c);
+    }
+    match &status.rate_change {
+        Some(RateChange::Waiting { hz }) => out += &format!("report-rate change: waiting for the keyboard to confirm {hz} Hz\n"),
+        Some(RateChange::Failed { hz, error }) => out += &format!("report-rate change to {hz} Hz failed: {error}\n"),
+        Some(RateChange::Done { .. }) | None => {}
+    }
     if let Some(m) = &status.message {
         out += &format!("last message: {m}\n");
     }
     out
+}
+
+fn controls_text(c: &Controls) -> String {
+    let brightness = c.brightness.map_or("not reported".into(), |[now, max]| format!("{now} of {max} (read only)"));
+    let rate = match c.report_rate {
+        Some(hz) => format!("{hz} Hz; supports {}", c.report_rates.iter().map(|r| format!("{r}")).collect::<Vec<_>>().join(", ")),
+        None => "not reported".into(),
+    };
+    let game = c.game_mode.map_or("not reported", |on| if on { "on (read only)" } else { "off (read only)" });
+    format!("brightness: {brightness}\nreport rate: {rate}\ngame mode: {game}\n")
 }
 
 fn status(device: Option<PathBuf>) -> Result<(), String> {
@@ -184,6 +208,7 @@ fn status(device: Option<PathBuf>) -> Result<(), String> {
     let layout = kb.layout_code().map_err(e)?;
     let zones = kb.zones().map_err(e)?;
     let (mode, flags) = kb.sw_control().map_err(e)?;
+    let (controls, _) = engine::read_controls(&mut kb).map_err(e)?;
     let model = kb.model;
     println!("keyboard: {} on {}, HID++ {major}.{minor}, layout code {layout:02x?}, {} zones", model.name, kb.path.display(), zones.len());
     let owner = if mode & 1 == 0 { "the keyboard's onboard effects" } else { "a host program" };
@@ -196,6 +221,7 @@ fn status(device: Option<PathBuf>) -> Result<(), String> {
     if !extra.is_empty() {
         println!("zones this keyboard reports that the definition lacks: {extra:?}");
     }
+    print!("{}", controls_text(&controls));
     Ok(())
 }
 
@@ -230,7 +256,8 @@ fn choose(args: &[String]) -> Result<(), String> {
     }
     match ipc::request(&Request::Use { profile: name.clone() }) {
         Ok(status) => print!("{}", describe(&status)),
-        Err(_) => {
+        Err(ipc::Error::Refused(e)) => return Err(e),
+        Err(ipc::Error::Unreachable(_)) => {
             profile::set_active(name.as_deref())?;
             match &name {
                 Some(n) => println!("loginux will keep {n:?} applied whenever its engine runs (the service or the editor)"),
@@ -393,4 +420,76 @@ keys = [
         p.interface,
     );
     Ok(())
+}
+
+/// `loginux rate` shows the report rate; `loginux rate HZ` changes it, once, at the
+/// user's request. The keyboard can re-enumerate, so the result is a readback.
+fn rate(device: Option<PathBuf>, args: &[String]) -> Result<(), String> {
+    let hz = match args {
+        [] => None,
+        [hz] => Some(hz.trim_end_matches("Hz").trim().parse::<u32>().map_err(|_| format!("{hz:?} is not a rate in Hz"))?),
+        _ => return Err("usage: loginux rate [HZ]".into()),
+    };
+    if let Ok(status) = ipc::request(&Request::Status) {
+        let Some(hz) = hz else {
+            print!("{}", status.controls.as_ref().map(controls_text).unwrap_or_else(|| "keyboard not connected\n".into()));
+            return Ok(());
+        };
+        ipc::request(&Request::SetReportRate { hz })?;
+        let end = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < end {
+            match ipc::request(&Request::Status).map(|s| s.rate_change) {
+                Ok(Some(RateChange::Done { hz })) => {
+                    println!("report rate is now {hz} Hz (read back from the keyboard)");
+                    return Ok(());
+                }
+                Ok(Some(RateChange::Failed { error, .. })) => return Err(format!("report-rate change: {error}")),
+                _ => sleep(Duration::from_millis(250)),
+            }
+        }
+        return Err("the engine did not confirm the change within 30 s; `loginux status` shows its state".into());
+    }
+    // No engine: this process owns the keyboard for the change.
+    let Some(_lock) = engine::lock(false)? else { return Err(engine_busy()) };
+    let e = |e: hidpp::Error| e.to_string();
+    let mut kb = open(device.clone())?;
+    let (controls, rates) = engine::read_controls(&mut kb).map_err(e)?;
+    let Some(hz) = hz else {
+        print!("{}", controls_text(&controls));
+        return Ok(());
+    };
+    let (supported, current) = rates.ok_or("this keyboard does not report a report rate (0x8061)")?;
+    let index = device::RATES_HZ
+        .iter()
+        .position(|&r| r == hz)
+        .map(|i| i as u8)
+        .filter(|i| supported.contains(i))
+        .ok_or_else(|| format!("{hz} Hz is not a rate this keyboard reports"))?;
+    if index == current {
+        println!("report rate is already {hz} Hz");
+        return Ok(());
+    }
+    match kb.set_report_rate(index) {
+        Ok(()) | Err(hidpp::Error::Gone(_)) | Err(hidpp::Error::Timeout(_)) => {}
+        Err(err) => return Err(err.to_string()),
+    }
+    drop(kb);
+    println!("sent {hz} Hz; waiting for the keyboard to reconnect");
+    sleep(Duration::from_secs(1));
+    let end = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < end {
+        if let Ok(mut kb) = open(device.clone()) {
+            let (_, rates) = engine::read_controls(&mut kb).map_err(e)?;
+            return match rates.map(|r| r.1) {
+                Some(i) if i == index => {
+                    println!("report rate is now {hz} Hz (read back from the keyboard)");
+                    Ok(())
+                }
+                Some(i) => Err(format!("the keyboard reports rate index {i}, not {hz} Hz")),
+                None => Err("the keyboard did not report its rate after the change".into()),
+            };
+        }
+        sleep(Duration::from_millis(250));
+    }
+    Err("the keyboard did not come back within 20 s; replug it, then run `loginux rate`".into())
 }

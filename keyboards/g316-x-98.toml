@@ -1,10 +1,10 @@
 # Logitech G316 X 98, ANSI 98-key layout. The format is described in CONTRIBUTING.md.
 #
 # Zone IDs are the keyboard's 0x8081 zones (HID keyboard usage minus 3,
-# modifiers 104-111), read live from the keyboard and checked against its
-# firmware. Positions are in key units (1 = one key pitch), measured from G
-# HUB's layout data and snapped to quarter units. Positions are layout data,
-# not proof of which LED lights: run a channel check to confirm them.
+# modifiers 104-111), read live from the keyboard. A channel check on
+# 2026-10-22 lit every zone alone and found each key and bar segment where it
+# is listed here. Positions are in key units (1 = one key pitch), measured
+# from G HUB's layout data and snapped to quarter units.
 
 name = "Logitech G316 X 98"
 protocol = "hidpp20"
@@ -117,7 +117,7 @@ keys = [
 ]
 
 # The light bar between the function row and the number row, split into equal
-# segments in this order. The order is G HUB's left to right and is unverified.
+# segments in this order: left to right, confirmed on the keyboard 2026-10-22.
 [[strip]]
 name = "bar"
 title = "Light bar"

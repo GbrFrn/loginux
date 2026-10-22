@@ -7,6 +7,9 @@ their own tool.
   protocol as Loginux uses it, with the requests to avoid.
 - [g316-x-98.md](g316-x-98.md): the G316 X 98: feature table, zones, light
   bar and the dot screen.
+- [g316-extra-controls.md](g316-extra-controls.md): usable G316 brightness,
+  report-rate, game-mode and media-control evidence beyond Loginux's current
+  per-key RGB support, with the write boundary for each.
 
 ## Evidence labels
 

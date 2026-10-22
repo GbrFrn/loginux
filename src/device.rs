@@ -2,8 +2,11 @@
 //!
 //! Write boundary: `ALLOWED` lists every request this program can send. SetEffect
 //! always carries persistence 0x01 (apply in RAM, flash-save bit clear) and
-//! FrameEnd carries 0x00, so nothing here can ask the keyboard to write its flash.
-//! DFU, reset and engineering features are never resolved or called.
+//! FrameEnd carries 0x00, so no lighting request can ask the keyboard to write
+//! its flash. The one device-setting write is the report rate (0x8061/3): it is
+//! sent only when the user asks for a rate, the keyboard may keep it, and the
+//! USB device can re-enumerate. Brightness and game mode are read only. DFU,
+//! reset and engineering features are never resolved or called.
 
 use crate::hidpp::{BUSY, Call, Error, Hidpp};
 use crate::layout::Model;
@@ -16,6 +19,9 @@ const ROOT: u16 = 0x0000;
 const RGB_EFFECTS: u16 = 0x8071;
 const PER_KEY: u16 = 0x8081;
 const LAYOUT: u16 = 0x4540;
+const BRIGHTNESS: u16 = 0x8040;
+const REPORT_RATE: u16 = 0x8061;
+const GAME_MODE: u16 = 0x4523;
 
 const ALLOWED: &[(u16, u8)] = &[
     (ROOT, 0),        // getFeature
@@ -27,7 +33,29 @@ const ALLOWED: &[(u16, u8)] = &[
     (PER_KEY, 1),     // setIndividualRgbZones: stage colours
     (PER_KEY, 7),     // frameEnd: commit the staged frame
     (LAYOUT, 0),      // getKeyboardLayout
+    (BRIGHTNESS, 0),  // getInfo: maximum brightness
+    (BRIGHTNESS, 1),  // getBrightness
+    (REPORT_RATE, 1), // getReportRateList: supported-rate bitmap
+    (REPORT_RATE, 2), // getReportRate
+    (REPORT_RATE, 3), // setReportRate: explicit user request only, never retried
+    (GAME_MODE, 0),   // getGameMode
 ];
+
+/// 0x8061 rate index to rate: bit `i` of the supported bitmap is index `i`.
+pub const RATES_HZ: [u32; 7] = [125, 250, 500, 1000, 2000, 4000, 8000];
+
+/// Optional HID++ features: None when the keyboard does not report them.
+#[derive(Clone, Copy, Default)]
+struct Optional {
+    brightness: Option<u8>,
+    report_rate: Option<u8>,
+    game_mode: Option<u8>,
+}
+
+/// Something the keyboard reported on its own, outside a request.
+pub enum Event {
+    GameMode(bool),
+}
 
 const STATIC: u16 = 0x0001; // 0x8071 effect ID
 const PERSIST_RAM: u8 = 0x01; // SetEffect persistence: apply now; bit 1 (flash) stays clear
@@ -40,6 +68,7 @@ pub struct Keyboard {
     pub model: &'static Model,
     rgb: u8,
     per_key: u8,
+    optional: Optional,
 }
 
 /// What `loginux probe` learns from a hidraw node, using reads only.
@@ -58,7 +87,8 @@ pub struct Probe {
 pub fn probe(path: &Path) -> Result<Probe, Error> {
     let io = Hidpp::open_unchecked(path, 0xFF)?;
     let (vendor, product, interface, hid_name) = io.identity(path).ok_or_else(|| Error::WrongDevice(path.into()))?;
-    let mut kb = Keyboard { io, path: path.into(), model: &crate::layout::models()[0], rgb: 0, per_key: 0 };
+    // The model is unused by these reads; any definition will do.
+    let mut kb = Keyboard { io, path: path.into(), model: &crate::layout::models()[0], rgb: 0, per_key: 0, optional: Optional::default() };
     let protocol = kb.protocol()?;
     let rgb = kb.feature(RGB_EFFECTS)?;
     let per_key = kb.feature(PER_KEY)?;
@@ -75,9 +105,15 @@ pub fn probe(path: &Path) -> Result<Probe, Error> {
 
 impl Keyboard {
     pub fn open(path: &Path, model: &'static Model) -> Result<Self, Error> {
-        let mut kb = Keyboard { io: Hidpp::open(path, model)?, path: path.into(), model, rgb: 0, per_key: 0 };
+        let mut kb =
+            Keyboard { io: Hidpp::open(path, model)?, path: path.into(), model, rgb: 0, per_key: 0, optional: Optional::default() };
         kb.rgb = kb.feature(RGB_EFFECTS)?.ok_or(Error::Unsupported(RGB_EFFECTS))?;
         kb.per_key = kb.feature(PER_KEY)?.ok_or(Error::Unsupported(PER_KEY))?;
+        kb.optional = Optional {
+            brightness: kb.feature(BRIGHTNESS)?,
+            report_rate: kb.feature(REPORT_RATE)?,
+            game_mode: kb.feature(GAME_MODE)?,
+        };
         Ok(kb)
     }
 
@@ -197,4 +233,48 @@ impl Keyboard {
         }
         self.write(PER_KEY, self.per_key, 7, &[0; 5]).map(drop) // FrameEnd, no persistence
     }
+
+    /// 0x8040: (current, maximum) brightness.
+    pub fn brightness(&mut self) -> Result<Option<(u16, u16)>, Error> {
+        let Some(index) = self.optional.brightness else { return Ok(None) };
+        let info = self.call(BRIGHTNESS, index, 0, &[])?;
+        let now = self.call(BRIGHTNESS, index, 1, &[])?;
+        Ok(Some((u16::from_be_bytes([now[0], now[1]]), u16::from_be_bytes([info[0], info[1]]))))
+    }
+
+    /// 0x8061: (supported rate indices, current index).
+    pub fn report_rates(&mut self) -> Result<Option<(Vec<u8>, u8)>, Error> {
+        let Some(index) = self.optional.report_rate else { return Ok(None) };
+        let list = self.call(REPORT_RATE, index, 1, &[0])?;
+        let bits = u16::from_be_bytes([list[0], list[1]]);
+        let supported = (0..RATES_HZ.len() as u8).filter(|i| bits >> i & 1 == 1).collect();
+        let current = self.call(REPORT_RATE, index, 2, &[0])?[0];
+        Ok(Some((supported, current)))
+    }
+
+    /// 0x8061/3, sent once. Only for an explicit user request: the keyboard can
+    /// re-enumerate before it answers, so a lost reply means "unknown", and the
+    /// caller reads the rate back instead of sending it again.
+    pub fn set_report_rate(&mut self, rate_index: u8) -> Result<(), Error> {
+        let index = self.optional.report_rate.ok_or(Error::Unsupported(REPORT_RATE))?;
+        self.call(REPORT_RATE, index, 3, &[rate_index]).map(drop)
+    }
+
+    /// 0x4523: game mode on or off.
+    pub fn game_mode(&mut self) -> Result<Option<bool>, Error> {
+        let Some(index) = self.optional.game_mode else { return Ok(None) };
+        Ok(Some(self.call(GAME_MODE, index, 0, &[])?[0] != 0))
+    }
+
+    /// Notifications that arrived since the last call, typed where they are known.
+    pub fn events(&mut self) -> Vec<Event> {
+        let game = self.optional.game_mode;
+        self.io
+            .notifications()
+            .into_iter()
+            .filter(|r| Some(r[2]) == game && r[3] >> 4 == 0)
+            .map(|r| Event::GameMode(r[4] != 0))
+            .collect()
+    }
+
 }

@@ -12,14 +12,15 @@ keyboard always restores its onboard lighting.
 
 ## Status
 
-Built and type-checked. On the keyboard, Loginux has so far found the device,
-read its zones, taken the lighting (software control read back `01 00`) and
-handed it back with `loginux release` (`00 06`); nobody watched the keys while it
-did. The protocol was proven with the Python tool in `tools/`: on 2026-10-22
-Esc turned red and the onboard lighting came back on release. Not yet observed
-with Loginux: a watched paint and release, the light-bar order, reconnect after
-replug or a report-rate change, and whether live edits flicker. `RESEARCH.md`
-has the evidence and its labels.
+Watched on a G316 X 98 on 2026-10-22: a single-key paint and its release, the
+light-bar order (a red-to-blue gradient ran left to right), the service
+repainting the keyboard by itself after an unplug and replug, live colour
+edits from the editor without visible flicker or lag, and the onboard lighting
+returning when the service stopped. A channel check of all 133 zones found
+every key and bar segment where the definition puts it; the 8 unknown zones
+lit nothing. Not yet observed: re-enumeration after a report-rate change, and
+whether the keyboard keeps a rate across a replug.
+[`research/`](research/README.md) records the evidence and its labels.
 
 ## Supported keyboards
 
@@ -31,6 +32,28 @@ Other Logitech keyboards that report HID++ features `0x8071` and `0x8081` can
 be added with a definition file and no code; `CONTRIBUTING.md` walks through
 it, starting from `loginux probe`. Protocol and device notes are in
 [`research/`](research/README.md).
+
+## Device settings
+
+The editor's DEVICE tab and `loginux status` show settings the keyboard
+reports, when it reports them. Loginux reads them on every connection and
+every ten seconds after.
+
+| Setting | What Loginux does | Proof |
+| --- | --- | --- |
+| Lighting brightness (`0x8040`) | Shows the current value and the maximum. Read only. | Read on Linux |
+| Game mode (`0x4523`) | Shows on or off, and follows the keyboard's game-mode key. Read only. | Read on Linux |
+| Report rate (`0x8061`) | Shows the current rate and the rates the keyboard supports. Changes it only when you ask: the DEVICE tab after a confirmation, or `loginux rate HZ`. | The change was seen in G HUB on Windows; Loginux has not changed it on Linux yet |
+| Volume knob | Nothing: the knob sends ordinary media keys, which Linux handles. | Seen on Windows |
+
+A report-rate change makes the keyboard leave the USB bus and come back.
+Loginux sends the new rate once and never retries it, waits up to 20 s for
+the keyboard, reads the rate back, and repaints the chosen profile. If the
+keyboard does not return or reports another rate, the editor and the command
+line say so. Whether the keyboard keeps the rate after a replug is not known
+yet. Brightness and game-mode changes are not offered: their commands on the
+G316 are not verified. [G316 extra controls](research/g316-extra-controls.md)
+has the evidence.
 
 ## Install
 
@@ -84,6 +107,7 @@ checked, its position is layout data and not proof.
 | `loginux apply NAME [--hold S \| --keep]` | Paints a profile for S seconds (default 10), then hands back |
 | `loginux paint esc=ff0000 bar3=00ff00 [--base RRGGBB]` | Paints single zones; takes the same `--hold`/`--keep` |
 | `loginux release` | Hands the lighting back to the keyboard now |
+| `loginux rate [HZ]` | Shows the report rate, or changes it and reads it back (the keyboard reconnects) |
 | `loginux run [--refresh S]` | The engine: keeps the profile applied; the service runs this |
 | `loginux probe --device /dev/hidrawN` | Read-only: prints a starting definition for a new keyboard |
 

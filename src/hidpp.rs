@@ -7,6 +7,7 @@
 //! but reads.
 
 use crate::layout::Model;
+use std::collections::VecDeque;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -135,6 +136,8 @@ pub struct Hidpp {
     file: File,
     device: u8,
     swid: u8,
+    /// Unsolicited reports (software ID 0) seen while waiting for replies.
+    notes: VecDeque<[u8; 20]>,
 }
 
 impl Hidpp {
@@ -156,7 +159,7 @@ impl Hidpp {
             .open(path)
             .map_err(|e| Error::Access(path.into(), e))?;
         class_dir(&file, path)?; // a character device, or nothing is sent
-        Ok(Hidpp { file, device, swid: 0 })
+        Ok(Hidpp { file, device, swid: 0, notes: VecDeque::new() })
     }
 
     /// sysfs identity of the opened node.
@@ -181,6 +184,7 @@ impl Hidpp {
             if !matches!(r[0], 0x10 | LONG) || r[1] != self.device {
                 continue;
             }
+            self.keep_notification(&r);
             if r[2] == 0xFF && r[3] == index && r[4] == fsw {
                 return Err(Error::Device(what, r[5]));
             }
@@ -193,10 +197,29 @@ impl Hidpp {
         Err(Error::Timeout(what))
     }
 
-    /// Discards pending input; fails once the keyboard is gone.
+    /// Reads pending input, keeping notifications; fails once the keyboard is gone.
     pub fn drain(&mut self) -> Result<(), Error> {
-        while self.read(Instant::now())?.is_some() {}
+        while let Some(r) = self.read(Instant::now())? {
+            if matches!(r[0], 0x10 | LONG) && r[1] == self.device {
+                self.keep_notification(&r);
+            }
+        }
         Ok(())
+    }
+
+    /// Notifications received so far, oldest first.
+    pub fn notifications(&mut self) -> Vec<[u8; 20]> {
+        self.notes.drain(..).collect()
+    }
+
+    fn keep_notification(&mut self, r: &[u8; 20]) {
+        // Software ID 0 and not an error report: the device spoke on its own.
+        if r[3] & 0x0F == 0 && r[2] != 0xFF {
+            if self.notes.len() == 32 {
+                self.notes.pop_front(); // bounded: the oldest are the least useful
+            }
+            self.notes.push_back(*r);
+        }
     }
 
     /// The next input report, or None at the deadline.

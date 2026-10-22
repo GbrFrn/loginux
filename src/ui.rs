@@ -8,7 +8,7 @@
 //! shape is a pixel-aligned rectangle.
 
 use crate::engine::{self, Hosted, STOP};
-use crate::ipc::{self, Control, Device, Request, Status};
+use crate::ipc::{self, Control, Device, RateChange, Request, Status};
 use crate::layout::{self, Kind, Model, Zone};
 use crate::pixelfont;
 use crate::profile::{self, Profile, Rgb, Seen};
@@ -255,13 +255,14 @@ impl Link {
                         None => out.preview.take().map_or(Request::Status, |p| Request::Preview { profile: p }),
                     }
                 };
-                let quiet = matches!(req, Request::Status);
                 let result = ipc::request(&req);
                 let mut out = lock.lock().expect("link lock");
-                if let (Err(e), false) = (&result, quiet) {
-                    out.errors.push(e.clone());
+                match result {
+                    Ok(status) => out.status = Some(Ok(status)),
+                    // The engine is there but said no: report it, keep the last status.
+                    Err(ipc::Error::Refused(e)) => out.errors.push(e),
+                    Err(ipc::Error::Unreachable(e)) => out.status = Some(Err(e)),
                 }
-                out.status = Some(result);
                 drop(out);
                 ctx.request_repaint();
             }
@@ -315,6 +316,7 @@ fn service_state() -> Service {
 enum Tab {
     Edit,
     Check,
+    Device,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -382,6 +384,8 @@ struct App {
     notice: Option<(String, Color32)>,
     confirm: Option<Confirm>,
     new_name: Option<String>,
+    /// A report rate the user picked, waiting for their confirmation.
+    rate_confirm: Option<u32>,
     closing: bool,
     engine_up: bool,
 }
@@ -397,7 +401,7 @@ impl App {
             hosted,
             device,
             host_tried: None,
-            status: Some(ipc::request(&Request::Status)),
+            status: Some(ipc::request(&Request::Status).map_err(String::from)),
             tab: Tab::Edit,
             names: vec![],
             cache: BTreeMap::new(),
@@ -420,6 +424,7 @@ impl App {
             notice: None,
             confirm: None,
             new_name: None,
+            rate_confirm: None,
             closing: false,
             engine_up: false,
         };
@@ -608,7 +613,7 @@ impl App {
         px_text(&p, pos2(r.min.x + 22.0, r.center().y - brand.y / 2.0), "LOGINUX", BRAND, TEXT);
 
         let mut x = r.min.x + 22.0 + brand.x + 36.0;
-        for (tab, name) in [(Tab::Edit, "EDIT"), (Tab::Check, "CHANNEL CHECK")] {
+        for (tab, name) in [(Tab::Edit, "EDIT"), (Tab::Check, "CHANNEL CHECK"), (Tab::Device, "DEVICE")] {
             let size = px_size(name, TAB, ppp);
             let hit = Rect::from_min_max(pos2(x - 8.0, r.min.y), pos2(x + size.x + 8.0, r.max.y));
             let resp = ui.interact(hit, ui.scope_id().with(name), Sense::click());
@@ -811,6 +816,9 @@ impl App {
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
         if self.tab == Tab::Check {
             return self.check_results(ui);
+        }
+        if self.tab == Tab::Device {
+            return self.device_notes(ui);
         }
         // Room is kept for the palette's header and one row, so it never vanishes on a short window.
         let height = ui.available_height() - 124.0 - 80.0;
@@ -1096,6 +1104,98 @@ impl App {
         match self.tab {
             Tab::Edit => self.edit(ui),
             Tab::Check => self.check(ui),
+            Tab::Device => self.device(ui),
+        }
+    }
+
+    // ---- device settings ------------------------------------------------------------
+
+    fn device(&mut self, ui: &mut Ui) {
+        label(ui, "DEVICE", TITLE, TEXT);
+        ui.add_space(6.0);
+        let Some(Device::Connected { name, path, protocol, .. }) = self.status().map(|s| s.device.clone()) else {
+            body(ui, "Connect the keyboard to read its settings.", TEXT2, 14.0);
+            return;
+        };
+        body(ui, format!("{name} on {path} \u{00b7} HID++ {protocol}"), TEXT2, 14.0);
+        ui.add_space(14.0);
+        let controls = self.status().and_then(|s| s.controls.clone()).unwrap_or_default();
+        let change = self.status().and_then(|s| s.rate_change.clone());
+        let row = |ui: &mut Ui, name: &str, value: &str, note: &str| {
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(vec2(170.0, 20.0), Sense::hover());
+                px_text(ui.painter(), r.min + vec2(0.0, 4.0), name, LABEL_PX, LABEL);
+                let (v, _) = ui.allocate_exact_size(vec2(170.0, 20.0), Sense::hover());
+                px_text(ui.painter(), v.min + vec2(0.0, 2.0), value, TAB, TEXT);
+                body(ui, note, LABEL, 12.5);
+            });
+            ui.add_space(10.0);
+        };
+        let brightness = controls.brightness.map_or("NOT REPORTED".into(), |[now, max]| format!("{now} OF {max}"));
+        row(ui, "BRIGHTNESS", &brightness, "Read only");
+        let game = controls.game_mode.map_or("NOT REPORTED", |on| if on { "ON" } else { "OFF" });
+        row(ui, "GAME MODE", game, "Read only; the keyboard's game-mode key sets it");
+        let rate = controls.report_rate.map_or("NOT REPORTED".into(), |hz| format!("{hz} HZ"));
+        row(ui, "REPORT RATE", &rate, "Changing it makes the keyboard reconnect");
+        row(ui, "VOLUME KNOB", "MEDIA KEYS", "Linux handles volume and mute itself");
+
+        if !controls.report_rates.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                label(ui, "SET RATE", LABEL_PX, LABEL);
+                ui.add_space(4.0);
+                let busy = matches!(change, Some(RateChange::Waiting { .. }));
+                for hz in &controls.report_rates {
+                    let current = controls.report_rate == Some(*hz);
+                    let text = format!("{hz} HZ");
+                    if current {
+                        let (sq, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+                        fill(ui.painter(), sq, TEXT2);
+                        label(ui, &text, LABEL_PX, TEXT2);
+                        ui.add_space(8.0);
+                    } else if button(ui, &text, Look::Quiet, !busy).clicked() {
+                        self.rate_confirm = Some(*hz);
+                    }
+                }
+            });
+            ui.add_space(10.0);
+        }
+        if let Some(hz) = self.rate_confirm {
+            ui.horizontal_wrapped(|ui| {
+                body(
+                    ui,
+                    format!("Change the report rate to {hz} Hz? The keyboard disconnects and comes back, and Loginux paints its lighting again."),
+                    AMBER,
+                    13.0,
+                );
+                if button(ui, "CHANGE RATE", Look::Primary, true).clicked() {
+                    self.link.send(Request::SetReportRate { hz });
+                    self.rate_confirm = None;
+                }
+                if button(ui, "CANCEL", Look::Quiet, true).clicked() {
+                    self.rate_confirm = None;
+                }
+            });
+            ui.add_space(10.0);
+        }
+        match change {
+            Some(RateChange::Waiting { hz }) => body(ui, format!("Waiting for the keyboard to confirm {hz} Hz\u{2026}"), TEXT2, 13.0),
+            Some(RateChange::Done { hz }) => body(ui, format!("Report rate read back as {hz} Hz."), GREEN, 13.0),
+            Some(RateChange::Failed { hz, error }) => body(ui, format!("The change to {hz} Hz did not take: {error}"), AMBER, 13.0),
+            None => ui.label(""),
+        };
+    }
+
+    fn device_notes(&mut self, ui: &mut Ui) {
+        label(ui, "ABOUT THESE SETTINGS", LABEL_PX, LABEL);
+        ui.add_space(4.0);
+        for text in [
+            "Loginux reads these from the keyboard each time it connects and every ten seconds after.",
+            "Brightness and game mode are read only until their commands are verified on this keyboard.",
+            "A report-rate change is sent once, only when you confirm it. Loginux then waits for the keyboard to come back and reads the rate back; it never sends a rate on its own.",
+            "G HUB was seen changing this keyboard between 1000 and 8000 Hz on Windows. On Linux the change is not verified yet, and whether the keyboard keeps the rate after a replug is unknown.",
+        ] {
+            body(ui, text, TEXT2, 13.0);
+            ui.add_space(6.0);
         }
     }
 
@@ -1464,7 +1564,8 @@ impl App {
 /// after LOGINUX_SHOT_AFTER frames (default 30) and closes it the normal way.
 /// LOGINUX_SHOT_SELECT="23,1,19,4" preselects zones and LOGINUX_SHOT_PAINT=#rrggbb paints
 /// them; LOGINUX_SHOT_CONFIRM shows the unsaved-close question; LOGINUX_SHOT_SERVICE=off|on
-/// stands in for systemd's answer; LOGINUX_SHOT_TAB=check
+/// stands in for systemd's answer; LOGINUX_SHOT_TAB=device opens the DEVICE tab
+/// (LOGINUX_SHOT_CONFIRM_RATE=8000 shows the rate confirmation); LOGINUX_SHOT_TAB=check
 /// opens the channel check, and LOGINUX_SHOT_SET=strip starts a run on the first strip.
 #[cfg(feature = "screenshot")]
 fn shot(app: &mut App, ctx: &egui::Context) {
@@ -1485,6 +1586,10 @@ fn shot(app: &mut App, ctx: &egui::Context) {
         }
         if std::env::var("LOGINUX_SHOT_CONFIRM").is_ok() {
             app.confirm = Some(Confirm::Close);
+        }
+        if std::env::var("LOGINUX_SHOT_TAB").is_ok_and(|t| t == "device") {
+            app.tab = Tab::Device;
+            app.rate_confirm = std::env::var("LOGINUX_SHOT_CONFIRM_RATE").ok().and_then(|r| r.parse().ok());
         }
         if std::env::var("LOGINUX_SHOT_TAB").is_ok_and(|t| t == "check") {
             app.tab = Tab::Check;

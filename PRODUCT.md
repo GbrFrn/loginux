@@ -66,10 +66,22 @@ not, rather than presenting metadata as fact.
   is implemented; `CONTRIBUTING.md` covers adding keyboards and protocols.
 - The G316 definition covers the ANSI 98-key layout (G HUB `g316x_ww_98`).
   Other layouts are undecided.
-- Unverified until observed on the keyboard: light-bar physical order, unknown
-  zones, reconnect behaviour of this app, and whether continuous updates
-  flicker.
+- Observed on the keyboard (2026-10-22): paint and release, light-bar order,
+  reconnect after replug, live edits without flicker, a channel check of all
+  133 zones. Not yet observed: a report-rate change on Linux.
 - Out of scope for now: the dot screen. It is a separate phase.
+
+## G316 controls
+
+Optional device status covers brightness (`0x8040`), report rate (`0x8061`)
+and game mode (`0x4523`). Each is discovered per connection, so other
+keyboard definitions promise none of them. Report-rate selection is a
+deliberate user action: the keyboard re-enumerates, and the engine reads the
+rate back and reapplies its RAM lighting profile. Brightness and game-mode
+writes wait for a verified G316 request and restoration behaviour. The knob
+already reports standard Consumer Control events to Linux. The evidence and
+remaining gaps are in
+[research/g316-extra-controls.md](research/g316-extra-controls.md).
 
 ## Brand Commitments
 
@@ -78,18 +90,20 @@ not, rather than presenting metadata as fact.
 
 ## Evidence on Hand
 
-- `RESEARCH.md`: protocol, zone map and proof labels.
+- [`research/`](research/README.md): protocol, zone map and proof labels.
 - Live visual proof (Python tool, 2026-10-22): Esc turned red, then the onboard
   lighting returned on release.
-- `ghub/device_depot/metadata.json`: key rectangles and light-bar positions
-  from G HUB. These are coordinates, not proof of the physical order.
+- The private research workspace contains G HUB layout metadata used to
+  derive the G316 definition. Its coordinates are not proof of physical LED
+  order; vendor files are not shipped in this repository.
 - No photos, screenshots or brand assets of our own exist. Logitech's product
   images and logos are not ours to ship.
 
 ## Product Principles
 
-1. Never leave the keyboard worse than you found it: RAM-only writes, a clean
-   release, unplug as the fallback.
+1. Never leave the keyboard worse than you found it: RAM-only lighting writes,
+   a clean release, and unplug as the lighting fallback. Any device-setting
+   write needs an explicit user action and a documented recovery path.
 2. Say what is proven. Observed, from metadata, and unknown stay distinct
    everywhere.
 3. Set once, then stay out of the way.

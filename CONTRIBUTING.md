@@ -103,6 +103,15 @@ was nothing to abstract yet. Keep the rules the HID++ backend follows:
   every exit path.
 - Never take the lighting from another program without an explicit request.
 
+Optional controls such as brightness, report rate and game mode are separate
+from the `0x8071`/`0x8081` lighting requirement. Discover each feature by ID
+on every connection and do not assume that another keyboard implements a
+G316-specific payload. Show an optional feature only when the connected
+device reports it. A setting that re-enumerates the device must be a deliberate
+action with a reconnect and readback path; it must not be replayed automatically
+like RAM-only lighting. Record getter, setter, persistence and restoration
+evidence separately in `research/` before exposing a write.
+
 ## Evidence
 
 Say what you observed on a keyboard and what you read in software, firmware
