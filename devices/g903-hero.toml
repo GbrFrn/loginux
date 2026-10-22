@@ -1,12 +1,13 @@
 # Logitech G903 LIGHTSPEED with HERO sensor, on its cable. The format is
 # described in CONTRIBUTING.md and the evidence in research/g903.md.
 #
-# The mouse has no per-key lighting: it reports two 0x8071 clusters, and each
-# light below is one cluster, painted with the Static effect in RAM. Cluster 1
-# is the G logo. Cluster 0 is the DPI indicator, the three LEDs under the DPI
-# buttons. Its firmware decides which of those LEDs are on, and while Loginux
-# holds the lighting they stay dark whatever colour it sets (live, 2026-10-22).
-# The rectangles only sketch a mouse seen from above.
+# The mouse has no per-key lighting: it reports two 0x8071 clusters, and the
+# light below is cluster 1, the G logo, painted with the Static effect in RAM.
+# Cluster 0 is the DPI indicator, the three LEDs under the DPI buttons. Its
+# firmware decides which of those LEDs are on, and a host cannot light them,
+# so this definition leaves it out. Claiming the lighting still takes every
+# cluster: the DPI indicator stays dark while Loginux holds the lighting
+# (live, 2026-10-22). The rectangle only sketches the logo's place.
 
 name = "Logitech G903 HERO"
 protocol = "hidpp20"
@@ -17,6 +18,5 @@ interface = 2
 board = [4, 6]
 
 lights = [
-  { name = "dpi", zone = 0, label = "DPI", at = [0.25, 0.75], size = [3.5, 0.75] },
   { name = "logo", zone = 1, at = [1.25, 3], size = [1.5, 1.5] },
 ]

@@ -328,7 +328,8 @@ enum Set {
 
 impl Set {
     fn all(model: &Model) -> Vec<Set> {
-        (0..model.strips.len()).map(Set::Strip).chain([Set::Unknown, Set::Keys]).collect()
+        let unknown = (!model.unknown().is_empty()).then_some(Set::Unknown);
+        (0..model.strips.len()).map(Set::Strip).chain(unknown).chain([Set::Keys]).collect()
     }
 
     fn zones(self, model: &Model) -> Vec<u8> {
@@ -343,7 +344,7 @@ impl Set {
         match self {
             Set::Strip(i) => model.strips[i].title.to_uppercase(),
             Set::Unknown => "UNKNOWN ZONES".into(),
-            Set::Keys => "ALL KEYS".into(),
+            Set::Keys => if model.per_key { "ALL KEYS" } else { "ALL LIGHTS" }.into(),
         }
     }
 }

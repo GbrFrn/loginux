@@ -27,7 +27,7 @@ whether the keyboard keeps a rate across a replug.
 | Device | Definition | Notes |
 | --- | --- | --- |
 | Logitech G316 X 98 (ANSI) | `devices/g316-x-98.toml` | 95 keys, 30-segment light bar, 8 zones with no known key |
-| Logitech G903 HERO, on its cable | `devices/g903-hero.toml` | the logo; the DPI indicator stays dark while Loginux holds the lighting ([why](research/g903.md)) |
+| Logitech G903 HERO, on its cable | `devices/g903-hero.toml` | logo only; the DPI indicator stays dark while Loginux holds the lighting ([why](research/g903.md)) |
 
 Other Logitech keyboards that report HID++ features `0x8071` and `0x8081` can
 be added with a definition file and no code, and so can devices with `0x8071`
