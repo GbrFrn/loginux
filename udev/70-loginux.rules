@@ -4,3 +4,6 @@
 
 # Logitech G316 X 98 (046d:c36b): HID++ on USB interface 2.
 SUBSYSTEM=="hidraw", IMPORT{builtin}="usb_id", ENV{ID_VENDOR_ID}=="046d", ENV{ID_MODEL_ID}=="c36b", ENV{ID_USB_INTERFACE_NUM}=="02", TAG+="uaccess"
+
+# Logitech G903 LIGHTSPEED (046d:c091) on its cable: HID++ on USB interface 2.
+SUBSYSTEM=="hidraw", IMPORT{builtin}="usb_id", ENV{ID_VENDOR_ID}=="046d", ENV{ID_MODEL_ID}=="c091", ENV{ID_USB_INTERFACE_NUM}=="02", TAG+="uaccess"

@@ -39,23 +39,55 @@ on every connection:
 
 ## 0x8071 RGB effects
 
+Logitech's specification of this feature, "x8071 - RGB Effects" version 4,
+is a public PDF; OpenLogi's notes on `0x8071` link it. Field meanings marked
+static below come from it.
+
 - Function 0 `getInfo`:
-  - `[ff ff 00]`: byte 2 is the number of lighting clusters.
-  - `[cluster ff 00]`: byte 4 is that cluster's number of effects.
+  - `[ff ff 00]`: byte 2 is the number of lighting clusters, bytes 3 and 4
+    the non-volatile capabilities (see function 3), bytes 5 and 6 extended
+    capabilities. (live; meanings static)
+  - `[cluster ff 00]`: bytes 2 and 3 are the location (`0x0001` primary,
+    `0x0002` logo, and so on) and byte 4 the number of effects. (live)
+    Byte 5 lists the cluster's event-display modes (`01` always on, `02`
+    always off, `04` on for a while after an event) and is `00` for a plain
+    lighting cluster. Byte 6 says whether effects can be saved to EEPROM, and
+    byte 7 whether function 2 may set which of the cluster's LEDs are on.
+    (static)
   - `[cluster i 00]`: bytes 2 and 3 are effect `i`'s ID; `0x0001` is Static. (live)
 - Function 5, software control:
-  - `[00]` reads `?, mode, flags`.
-  - `[01 mode flags]` sets them.
-  - Mode bit 0 hands the effects to the host and bit 1 hands over power
-    management. (live, and static from Solaar)
+  - `[00]` reads `00, control, events`.
+  - `[01 control events]` sets them.
+  - Control bit 0 hands every cluster to the host and bit 1 hands over power
+    management. (live, and static from Solaar and the specification)
+  - The events byte only turns on notifications: `01` effect sync, `02` user
+    activity, `04` no-activity timeout. It does not change what the LEDs
+    show. (static)
   - Releasing bit 0 makes the firmware reload its onboard effects: the
-    lighting came back on the G316. (live)
+    lighting came back on the G316, and the G903 reads back `00 00`. (live)
 - Function 1 `setEffect`: `[cluster, effect index, 10 parameter bytes, persistence]`.
   - For Static the parameters are `R G B` followed by seven zeros.
-  - It fails with error 5 unless mode bit 0 is set. (live)
-  - In the G316 firmware, persistence bit 0 applies the effect, bit 1 saves it
-    to flash, and bits 2 and 3 select a power state. Loginux always sends
-    `01`, so nothing is saved. (static)
+  - It fails with error 5 unless control bit 0 is set. (live)
+  - Persistence bit 0 applies the effect in RAM and bit 1 saves it to
+    EEPROM; bits 2 and 3 pick the power mode it is for (0 full power, 1 power
+    save). Loginux always sends `01`, so nothing is saved. (static, from the
+    G316 firmware and the specification)
+- Function 3 `manageNvConfig` reads or writes one non-volatile setting.
+  `[00 capability]` reads it and returns the capability, its state and its
+  parameters; `[01 ...]` writes EEPROM, and Loginux refuses to send that
+  form. Capabilities: `0x0001` boot-up effect, `0x0002` demo, `0x0004` user
+  demo, `0x0008` events display (such as DPI status), `0x0010` active
+  dimming, `0x0020` ramp down to off, `0x0040` shutdown effect. (static;
+  the get form is live on the G903)
+
+### Indicator clusters
+
+A cluster with a non-zero byte 5 is an event display, such as the three DPI
+LEDs of a G903: several LEDs share one colour, and the firmware decides which
+of them are on. Claiming software control stops the firmware's handling of
+every cluster. When byte 7 is `00`, the host also has no way to switch the
+LEDs on, and on the G903 they stay dark whatever effect the host sets. (live
+on the G903; the cause is inference, see [g903.md](g903.md))
 
 ## 0x8081 per-key lighting (v2)
 
@@ -105,6 +137,15 @@ experimenting (from the G316 sessions; the IDs are standard HID++ features):
 - `0x18b0`: monitor mode, which floods reports
 - `0x1e02` and `0x1602`: managing deactivatable features and password
   authentication; engineering features sit behind them
+
+These write non-volatile memory, which Loginux never does:
+
+- `0x8071` function 3 in its set form (`01 ...`): non-volatile lighting
+  settings
+- `0x8071` function 4 in its set form: the factory colour calibration of
+  each cluster's LEDs
+- `0x8100` memory writes: onboard profiles, the way libratbag changes
+  lighting on `0x8071` mice
 
 Changing the report rate through `0x8061` makes the USB device re-enumerate,
 so its hidraw node disappears and comes back. (live on the G316 under

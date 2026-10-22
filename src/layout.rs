@@ -1,7 +1,7 @@
-//! Keyboard definitions: which USB device is which keyboard, and where its
-//! lighting zones are. Built-in definitions live in `keyboards/` and are
+//! Device definitions: which USB device is which keyboard or mouse, and where
+//! its lighting zones are. Built-in definitions live in `devices/` and are
 //! compiled in; more can be added without rebuilding as
-//! `$XDG_CONFIG_HOME/loginux/keyboards/ID.toml`, where a file with a built-in's ID
+//! `$XDG_CONFIG_HOME/loginux/devices/ID.toml`, where a file with a built-in's ID
 //! replaces it. CONTRIBUTING.md describes the format.
 //!
 //! Positions are layout data in key units (1 = one key pitch), not proof of
@@ -11,8 +11,11 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
-/// Add a line here when a definition joins `keyboards/`.
-const BUILT_IN: &[(&str, &str)] = &[("g316-x-98", include_str!("../keyboards/g316-x-98.toml"))];
+/// Add a line here when a definition joins `devices/`.
+const BUILT_IN: &[(&str, &str)] = &[
+    ("g316-x-98", include_str!("../devices/g316-x-98.toml")),
+    ("g903-hero", include_str!("../devices/g903-hero.toml")),
+];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
@@ -46,6 +49,9 @@ pub struct Strip {
 pub struct Model {
     pub id: String,
     pub name: String,
+    /// true: zones are 0x8081 per-key zones painted in frames. false: zones are
+    /// 0x8071 clusters, each painted with the Static effect.
+    pub per_key: bool,
     pub vendor: u16,
     pub product: u16,
     pub interface: u8,
@@ -61,6 +67,8 @@ pub struct Model {
 struct Def {
     name: String,
     protocol: String,
+    #[serde(default = "per_key")]
+    lighting: String,
     vendor: u16,
     product: u16,
     interface: u8,
@@ -69,7 +77,12 @@ struct Def {
     board: [f32; 2],
     #[serde(default)]
     unknown: Vec<u8>,
+    #[serde(default)]
     keys: Vec<KeyDef>,
+    /// Named lights that are not keys, such as a mouse logo; `zone` is the
+    /// cluster on a "clusters" device.
+    #[serde(default)]
+    lights: Vec<KeyDef>,
     #[serde(default)]
     strip: Vec<StripDef>,
 }
@@ -99,6 +112,10 @@ fn wired() -> u8 {
     0xFF
 }
 
+fn per_key() -> String {
+    "per-key".into()
+}
+
 fn one_unit() -> [f32; 2] {
     [1.0, 1.0]
 }
@@ -115,19 +132,25 @@ impl Model {
         if d.protocol != "hidpp20" {
             return Err(at(format!("protocol {:?} is not supported; only \"hidpp20\" is (see CONTRIBUTING.md)", d.protocol)));
         }
-        let mut zones: Vec<Zone> = d
-            .keys
-            .into_iter()
-            .map(|k| Zone {
-                id: k.zone,
-                label: k.label.unwrap_or_else(|| k.name.to_uppercase()),
-                short: k.short,
-                name: k.name,
-                kind: Kind::Key,
-                group: "keys".into(),
-                rect: [k.at[0], k.at[1], k.size[0], k.size[1]],
-            })
-            .collect();
+        let per_key = match d.lighting.as_str() {
+            "per-key" => true,
+            "clusters" => false,
+            other => return Err(at(format!("lighting {other:?} is not \"per-key\" or \"clusters\""))),
+        };
+        if !per_key && (!d.strip.is_empty() || !d.unknown.is_empty()) {
+            return Err(at("a \"clusters\" device has only `keys` and `lights`, one per cluster".into()));
+        }
+        let entry = |k: KeyDef, group: &str| Zone {
+            id: k.zone,
+            label: k.label.unwrap_or_else(|| k.name.to_uppercase()),
+            short: k.short,
+            name: k.name,
+            kind: Kind::Key,
+            group: group.into(),
+            rect: [k.at[0], k.at[1], k.size[0], k.size[1]],
+        };
+        let mut zones: Vec<Zone> = d.keys.into_iter().map(|k| entry(k, "keys")).collect();
+        zones.extend(d.lights.into_iter().map(|k| entry(k, "lights")));
         let mut strips = vec![];
         for s in d.strip {
             if ["keys", "zones", "base"].contains(&s.name.as_str()) || !valid_name(&s.name) {
@@ -172,6 +195,7 @@ impl Model {
         Ok(Model {
             id: id.into(),
             name: d.name,
+            per_key,
             vendor: d.vendor,
             product: d.product,
             interface: d.interface,
@@ -197,6 +221,17 @@ impl Model {
 
     pub fn unknown(&self) -> Vec<u8> {
         self.ids(Kind::Unknown)
+    }
+
+    /// Base-colour groups in definition order: "keys", "lights", then each strip.
+    pub fn groups(&self) -> Vec<&str> {
+        let mut groups: Vec<&str> = vec![];
+        for z in self.zones.iter().filter(|z| z.kind != Kind::Unknown) {
+            if !groups.contains(&z.group.as_str()) {
+                groups.push(&z.group);
+            }
+        }
+        groups
     }
 
     /// Readable reason a key name was rejected.
@@ -234,7 +269,7 @@ pub fn models() -> &'static [Model] {
     MODELS.get_or_init(|| {
         let mut models: Vec<Model> =
             BUILT_IN.iter().map(|(id, text)| Model::parse(id, text).expect("built-in keyboard definition")).collect();
-        let dir = crate::profile::config_dir().join("keyboards");
+        let dir = crate::profile::config_dir().join("devices");
         let mut files: Vec<_> = std::fs::read_dir(&dir).into_iter().flatten().filter_map(|e| Some(e.ok()?.path())).collect();
         files.sort();
         for path in files.into_iter().filter(|p| p.extension().is_some_and(|e| e == "toml")) {

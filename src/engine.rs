@@ -4,8 +4,8 @@
 //! keyboard when it stops.
 //!
 //! Ownership of the lighting is recorded twice: on the keyboard (0x8071 software
-//! control, mode bit 0) and in $XDG_RUNTIME_DIR/loginux/claim, which holds the
-//! values to restore. A claim on the keyboard without that file belongs to some
+//! control, mode bit 0) and in $XDG_RUNTIME_DIR/loginux/claim-<device id>, which
+//! holds the values to restore. A claim on the keyboard without that file belongs to some
 //! other program, and loginux waits for an explicit take-over instead of
 //! overwriting it.
 
@@ -116,15 +116,16 @@ impl From<Error> for TakeError {
     }
 }
 
-fn marker() -> Option<PathBuf> {
-    Some(ipc::runtime_dir().ok()?.join("claim"))
+/// One claim record per device definition, so two devices never share one.
+fn marker(id: &str) -> Option<PathBuf> {
+    Some(ipc::runtime_dir().ok()?.join(format!("claim-{id}")))
 }
 
 /// (values to restore, software control read back after the claim)
 type Marker = ((u8, u8), Option<(u8, u8)>);
 
-fn read_marker() -> Option<Marker> {
-    let text = fs::read_to_string(marker()?).ok()?;
+fn read_marker(id: &str) -> Option<Marker> {
+    let text = fs::read_to_string(marker(id)?).ok()?;
     let pair = |key: &str| -> Option<(u8, u8)> {
         let v = text.lines().find_map(|l| l.strip_prefix(key))?;
         let mut it = v.split_whitespace().map(|b| u8::from_str_radix(b, 16).ok());
@@ -133,18 +134,18 @@ fn read_marker() -> Option<Marker> {
     Some((pair("restore=")?, pair("held=")))
 }
 
-fn write_marker(restore: (u8, u8), held: Option<(u8, u8)>) {
+fn write_marker(id: &str, restore: (u8, u8), held: Option<(u8, u8)>) {
     let mut text = format!("restore={:02x} {:02x}\n", restore.0, restore.1);
     if let Some((m, f)) = held {
         text += &format!("held={m:02x} {f:02x}\n");
     }
-    if let Some(path) = marker() {
+    if let Some(path) = marker(id) {
         let _ = fs::write(path, text);
     }
 }
 
-fn clear_marker() {
-    if let Some(path) = marker() {
+fn clear_marker(id: &str) {
+    if let Some(path) = marker(id) {
         let _ = fs::remove_file(path);
     }
 }
@@ -154,27 +155,32 @@ fn clear_marker() {
 /// else's is a conflict unless `force`, and a forced take-over restores plain
 /// firmware control (0, 0) on release.
 pub fn take(kb: &mut Keyboard, force: bool) -> Result<Held, TakeError> {
+    let id = kb.model.id.clone();
     let now = kb.sw_control()?;
     let restore = if now.0 & 1 == 0 {
         now
     } else {
-        match read_marker() {
+        match read_marker(&id) {
             Some((restore, held)) if held.is_none_or(|h| h == now) => restore,
             _ if force => (0, 0),
             _ => return Err(TakeError::Conflict(now.0, now.1)),
         }
     };
-    write_marker(restore, None);
+    write_marker(&id, restore, None);
     kb.set_sw_control(1, 0)?;
     sleep(SETTLE); // let the LED task apply the claim before SetEffect
     let state = kb.sw_control()?;
-    write_marker(restore, Some(state));
+    write_marker(&id, restore, Some(state));
     Ok(Held { restore, state, base: None, frame: vec![] })
 }
 
 /// Static `base` on every cluster, then the frame twice: the first frame after a
-/// claim can be dropped (Solaar replays it too).
+/// claim can be dropped (Solaar replays it too). On a clusters device the frame
+/// is one colour per cluster, set once as that cluster's Static effect.
 pub fn paint(kb: &mut Keyboard, statics: &[(u8, u8)], base: Rgb, frame: &[(u8, Rgb)]) -> Result<(), Error> {
+    if !kb.model.per_key {
+        return update(kb, statics, frame);
+    }
     for &s in statics {
         kb.set_static(s, base)?;
     }
@@ -183,17 +189,35 @@ pub fn paint(kb: &mut Keyboard, statics: &[(u8, u8)], base: Rgb, frame: &[(u8, R
     kb.send_frame(frame)
 }
 
+/// A changed frame, without the claim-time Static reset.
+pub fn update(kb: &mut Keyboard, statics: &[(u8, u8)], frame: &[(u8, Rgb)]) -> Result<(), Error> {
+    if kb.model.per_key {
+        return kb.send_frame(frame);
+    }
+    for &(cluster, rgb) in frame {
+        if let Some(&s) = statics.iter().find(|s| s.0 == cluster) {
+            kb.set_static(s, rgb)?;
+        }
+    }
+    Ok(())
+}
+
+/// Zones the device accepts: the 0x8081 bitmap, or the clusters on a clusters device.
+pub fn zones(kb: &mut Keyboard, statics: &[(u8, u8)]) -> Result<Vec<u8>, Error> {
+    if kb.model.per_key { kb.zones() } else { Ok(statics.iter().map(|s| s.0).collect()) }
+}
+
 /// Hands the effects back; the firmware then reloads its onboard effects.
-/// Returns what the keyboard reports afterwards.
+/// Returns what the device reports afterwards.
 pub fn give_back(kb: &mut Keyboard, restore: (u8, u8)) -> Result<(u8, u8), Error> {
     kb.set_sw_control(restore.0 & !1, restore.1)?;
-    clear_marker();
+    clear_marker(&kb.model.id);
     kb.sw_control()
 }
 
 /// For `loginux release` without an engine: the saved values, or plain firmware control.
 pub fn release_now(kb: &mut Keyboard) -> Result<(u8, u8), Error> {
-    let restore = read_marker().map_or((0, 0), |(r, _)| r);
+    let restore = read_marker(&kb.model.id).map_or((0, 0), |(r, _)| r);
     give_back(kb, restore)
 }
 
@@ -542,8 +566,8 @@ impl Engine {
             let mut kb = Keyboard::open(&path, model)?;
             let protocol = kb.protocol()?;
             let layout = kb.layout_code()?;
-            let zones = kb.zones()?;
             let statics = kb.static_effects()?;
+            let zones = zones(&mut kb, &statics)?;
             let (controls, rates) = read_controls(&mut kb)?;
             Ok((kb, protocol, layout, zones, statics, controls, rates))
         });
@@ -675,7 +699,7 @@ impl Engine {
                     log("the keyboard took its lighting back (reset or wake); applying again");
                 } else {
                     log(&format!("another program took the lighting (software control {:02x} {:02x})", state.0, state.1));
-                    clear_marker();
+                    clear_marker(&link.kb.model.id);
                     link.conflict = Some(state);
                 }
             }
@@ -709,7 +733,7 @@ impl Engine {
             h.base = Some(base);
             h.frame = frame;
         } else if h.frame != frame || refresh_due {
-            link.kb.send_frame(&frame)?;
+            update(&mut link.kb, &link.statics, &frame)?;
             h.frame = frame;
         } else {
             return Ok(());

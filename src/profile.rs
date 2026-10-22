@@ -4,7 +4,7 @@
 //!   profiles/NAME.toml   one profile per file
 //!   config.toml          the profile loginux keeps applied, and the keyboard last seen
 //!   checks/ID.toml       what lit up during channel checks, per keyboard model
-//!   keyboards/ID.toml    the user's own keyboard definitions (see layout.rs)
+//!   devices/ID.toml      the user's own device definitions (see layout.rs)
 
 use crate::layout::{self, Kind, Model};
 use serde::{Deserialize, Serialize};
@@ -28,9 +28,9 @@ pub fn hex([r, g, b]: Rgb) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
-/// A colour for every key and strip segment. `bases` holds the colour of each
-/// group ("keys", and each strip by name, e.g. "bar"); `zones` overrides single
-/// zones. Unknown zones are lit only when `zones` names them.
+/// A colour for every key, light and strip segment. `bases` holds the colour of
+/// each group ("keys", "lights", and each strip by name, e.g. "bar"); `zones`
+/// overrides single zones. Unknown zones are lit only when `zones` names them.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Profile {
     pub bases: BTreeMap<String, Rgb>,
@@ -38,12 +38,13 @@ pub struct Profile {
 }
 
 impl Profile {
-    /// Parses a profile for `model`: [keys], one table per strip, and [zones].
+    /// Parses a profile for `model`: one table per group ([keys], [lights], each
+    /// strip) and [zones].
     pub fn parse(model: &Model, text: &str) -> Result<Self, String> {
         let doc: toml::Table = text.parse().map_err(|e: toml::de::Error| e.to_string())?;
         let mut p = Profile::default();
         let mut by = BTreeMap::<u8, String>::new();
-        let groups: Vec<&str> = std::iter::once("keys").chain(model.strips.iter().map(|s| s.name.as_str())).collect();
+        let groups = model.groups();
         for (section, value) in &doc {
             let table = value.as_table().ok_or_else(|| format!("{section} must be a [{section}] table"))?;
             if section != "zones" && !groups.contains(&section.as_str()) {
@@ -82,11 +83,10 @@ impl Profile {
     pub fn to_toml(&self, model: &Model) -> String {
         let mut out = String::from(
             "# Loginux lighting profile. Colours are #rrggbb.\n\
-             # base fills every key, or every segment of a strip, that is not listed.\n\
+             # base fills every key, light or strip segment of its table that is not listed.\n\
              # [zones] takes raw zone IDs; it is the only way to light the unknown zones.\n",
         );
-        let groups = std::iter::once("keys").chain(model.strips.iter().map(|s| s.name.as_str()));
-        for group in groups {
+        for group in model.groups() {
             out += &format!("\n[{group}]\nbase = \"{}\"\n", hex(self.base(group)));
             for z in model.zones.iter().filter(|z| z.group == group) {
                 if let Some(c) = self.zones.get(&z.id) {

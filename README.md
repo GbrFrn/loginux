@@ -22,15 +22,17 @@ lit nothing. Not yet observed: re-enumeration after a report-rate change, and
 whether the keyboard keeps a rate across a replug.
 [`research/`](research/README.md) records the evidence and its labels.
 
-## Supported keyboards
+## Supported devices
 
-| Keyboard | Definition | Notes |
+| Device | Definition | Notes |
 | --- | --- | --- |
-| Logitech G316 X 98 (ANSI) | `keyboards/g316-x-98.toml` | 95 keys, 30-segment light bar, 8 zones with no known key |
+| Logitech G316 X 98 (ANSI) | `devices/g316-x-98.toml` | 95 keys, 30-segment light bar, 8 zones with no known key |
+| Logitech G903 HERO, on its cable | `devices/g903-hero.toml` | the logo; the DPI indicator stays dark while Loginux holds the lighting ([why](research/g903.md)) |
 
 Other Logitech keyboards that report HID++ features `0x8071` and `0x8081` can
-be added with a definition file and no code; `CONTRIBUTING.md` walks through
-it, starting from `loginux probe`. Protocol and device notes are in
+be added with a definition file and no code, and so can devices with `0x8071`
+alone, such as mice, at one colour per lighting cluster. `CONTRIBUTING.md`
+walks through it, starting from `loginux probe`. Protocol and device notes are in
 [`research/`](research/README.md).
 
 ## Device settings
@@ -67,9 +69,9 @@ The rule tags interface 2 only; the interfaces that carry keystrokes stay
 root-only.
 
 ```sh
-sudo cp udev/70-loginux-hidpp.rules /etc/udev/rules.d/
+sudo cp udev/70-loginux.rules /etc/udev/rules.d/
 sudo udevadm control --reload
-sudo udevadm trigger --subsystem-match=hidraw --property-match=ID_MODEL_ID=c36b
+sudo udevadm trigger --subsystem-match=hidraw
 ```
 
 ## The editor
@@ -199,7 +201,7 @@ socket there.
 - `~/.config/loginux/profiles/*.toml`: profiles
 - `~/.config/loginux/config.toml`: the chosen profile and the keyboard last seen
 - `~/.config/loginux/checks/KEYBOARD.toml`: channel-check answers per keyboard model
-- `~/.config/loginux/keyboards/*.toml`: your own keyboard definitions; one with
+- `~/.config/loginux/devices/*.toml`: your own device definitions; one with
   a built-in's ID replaces it
 - `$XDG_RUNTIME_DIR/loginux/`: lock, socket and claim record (cleared at logout)
 

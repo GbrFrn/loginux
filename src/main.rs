@@ -1,6 +1,7 @@
 //! loginux: per-key and light-bar RGB for the Logitech G316 X 98 on Linux.
 
 mod device;
+mod effects;
 mod engine;
 mod hidpp;
 mod ipc;
@@ -22,7 +23,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 const USAGE: &str = "\
-loginux: per-key and light-strip RGB for Logitech HID++ keyboards (built in: G316 X 98)
+loginux: RGB lighting for Logitech HID++ keyboards and mice (built in: G316 X 98, G903 HERO)
 
 Usage:
   loginux [ui]                       open the editor window
@@ -36,6 +37,9 @@ Usage:
                                   paint keys (esc, f1, kp5, leftshift), bar1..bar30 or zone IDs
   loginux release                    hand the lighting back to the keyboard's onboard effects
   loginux rate [HZ]                  show the report rate, or change it (the keyboard reconnects)
+  loginux effect CLUSTER=EFFECT[,param=value]... [--hold SECS | --keep]
+                                     run a built-in effect (static, cycle, breathe, wave, ripple)
+                                     on a lighting cluster, by number or light name
   loginux probe --device /dev/hidrawN
                                   read-only: print a starting definition for a new keyboard
 
@@ -69,6 +73,7 @@ fn main() -> ExitCode {
             "release" => no_more(&args).and_then(|_| release(device)),
             "probe" => no_more(&args).and_then(|_| probe(device)),
             "rate" => rate(device, &args),
+            "effect" => effect(device, &mut args),
             other => Err(format!("unknown command {other:?}\n\n{USAGE}")),
         }
     });
@@ -206,7 +211,8 @@ fn status(device: Option<PathBuf>) -> Result<(), String> {
     let e = |e: hidpp::Error| e.to_string();
     let (major, minor) = kb.protocol().map_err(e)?;
     let layout = kb.layout_code().map_err(e)?;
-    let zones = kb.zones().map_err(e)?;
+    let statics = kb.static_effects().map_err(e)?;
+    let zones = engine::zones(&mut kb, &statics).map_err(e)?;
     let (mode, flags) = kb.sw_control().map_err(e)?;
     let (controls, _) = engine::read_controls(&mut kb).map_err(e)?;
     let model = kb.model;
@@ -289,9 +295,9 @@ fn paint(device: Option<PathBuf>, command: &str, args: &mut Vec<String>) -> Resu
     };
     engine::install_signal_handlers();
     let e = |e: hidpp::Error| e.to_string();
-    let zones = kb.zones().map_err(e)?;
-    let frame = profile.frame(model, &zones)?;
     let statics = kb.static_effects().map_err(e)?;
+    let zones = engine::zones(&mut kb, &statics).map_err(e)?;
+    let frame = profile.frame(model, &zones)?;
     let held = engine::take(&mut kb, false).map_err(|t| match t {
         TakeError::Conflict(m, f) => format!(
             "another program holds the lighting (software control {m:02x} {f:02x}); \
@@ -323,7 +329,7 @@ fn assignments(model: &Model, args: &mut Vec<String>) -> Result<Profile, String>
         return Err("usage: loginux paint ZONE=RRGGBB... [--base RRGGBB] [--hold SECS | --keep]".into());
     }
     let mut p = Profile::default();
-    for group in std::iter::once("keys").chain(model.strips.iter().map(|s| s.name.as_str())) {
+    for group in model.groups() {
         p.bases.insert(group.to_string(), base);
     }
     for arg in args.iter() {
@@ -504,4 +510,59 @@ fn rate(device: Option<PathBuf>, args: &[String]) -> Result<(), String> {
         sleep(Duration::from_millis(250));
     }
     Err("the keyboard did not come back within 20 s; replug it, then run `loginux rate`".into())
+}
+
+/// `loginux effect 0=wave logo=breathe,color=ff0000 --hold 10`: built-in effects
+/// on lighting clusters, in RAM. Clusters not named are left as they are.
+fn effect(device: Option<PathBuf>, args: &mut Vec<String>) -> Result<(), String> {
+    let keep = take_flag(args, "--keep");
+    let hold = take_value(args, "--hold")?;
+    if keep && hold.is_some() {
+        return Err("--hold and --keep exclude each other".into());
+    }
+    let hold = if keep { None } else { Some(seconds(hold, 10.0)?) };
+    if args.is_empty() {
+        return Err("usage: loginux effect CLUSTER=EFFECT[,param=value]... [--hold SECS | --keep]".into());
+    }
+    let Some(_lock) = engine::lock(false)? else { return Err(engine_busy()) };
+    let mut kb = open(device)?;
+    let e = |e: hidpp::Error| e.to_string();
+    let lists = kb.effect_ids().map_err(e)?;
+    let mut plan = vec![];
+    for arg in args.iter() {
+        let (target, text) = arg.split_once('=').ok_or_else(|| format!("{arg:?} is not CLUSTER=EFFECT"))?;
+        // A light name on a clusters device is its cluster; otherwise the cluster number.
+        let cluster = match target.parse::<u8>() {
+            Ok(c) => c,
+            Err(_) => kb.model.named(target).filter(|_| !kb.model.per_key).map(|z| z.id).ok_or_else(|| {
+                format!("{target:?} is not a cluster number or a light of the {}", kb.model.name)
+            })?,
+        };
+        let ids = lists.get(usize::from(cluster)).ok_or_else(|| format!("the device has {} clusters", lists.len()))?;
+        let (id, params) = effects::Effect::parse(text)?.encode(ids)?;
+        let index = ids.iter().position(|&i| i == id).expect("encode picks a listed ID") as u8;
+        plan.push((cluster, index, id, params));
+    }
+    engine::install_signal_handlers();
+    let held = engine::take(&mut kb, false).map_err(|t| match t {
+        TakeError::Conflict(m, f) => format!("another program holds the lighting (software control {m:02x} {f:02x})"),
+        TakeError::Hid(err) => err.to_string(),
+    })?;
+    let result = plan.iter().try_for_each(|&(cluster, index, _, params)| kb.set_effect(cluster, index, params).map_err(e));
+    if result.is_ok() {
+        for (cluster, _, id, params) in &plan {
+            println!("cluster {cluster}: effect {id:#04x}, parameters {}", params.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "));
+        }
+        let Some(secs) = hold else {
+            println!("holding; `loginux release` hands the lighting back");
+            return Ok(());
+        };
+        let end = Instant::now() + Duration::from_secs_f64(secs);
+        while Instant::now() < end && !STOP.load(Ordering::SeqCst) {
+            sleep(Duration::from_millis(100));
+        }
+    }
+    let after = engine::give_back(&mut kb, held.restore).map_err(e)?;
+    println!("lighting handed back to the device (software control now {:02x} {:02x})", after.0, after.1);
+    result
 }

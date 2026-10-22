@@ -4,13 +4,14 @@
 
 Loginux drives Logitech keyboards that speak HID++ 2.0 and report two features:
 `0x8071` (RGB effects) and `0x8081` (per-key lighting). Such a keyboard needs
-no code, only a definition file. Other keyboards need a protocol backend; see
-the last section.
+no code, only a definition file; so does a device with `0x8071` alone, such as
+a mouse (see [Cluster devices](#cluster-devices)). Other devices need a
+protocol backend; see the last section.
 
 1. **Give your user access to the keyboard's HID++ interface.** Find its
    hidraw node with `udevadm info /dev/hidrawN`: look for your keyboard's
    `ID_VENDOR_ID` and `ID_MODEL_ID`, and note `ID_USB_INTERFACE_NUM`. Add a
-   line for it to `udev/70-loginux-hidpp.rules` and install the rule as the
+   line for it to `udev/70-loginux.rules` and install the rule as the
    README describes. Tag only the HID++ interface; the interfaces that carry
    keystrokes must stay root-only.
 
@@ -18,7 +19,7 @@ the last section.
    definition:
 
    ```sh
-   loginux probe --device /dev/hidrawN > ~/.config/loginux/keyboards/my-keyboard.toml
+   loginux probe --device /dev/hidrawN > ~/.config/loginux/devices/my-keyboard.toml
    ```
 
    The file name, without `.toml`, becomes the definition's ID. The key names
@@ -36,7 +37,7 @@ the last section.
    using key units (1 = one key pitch, quarter steps are usual). Restart
    `loginux` to see each change.
 
-5. **Send it.** Copy the file into `keyboards/`, add a line for it to
+5. **Send it.** Copy the file into `devices/`, add a line for it to
    `BUILT_IN` in `src/layout.rs`, add your udev line, and open a pull request.
    Say what you observed on the keyboard and what you took from elsewhere,
    such as vendor software.
@@ -81,6 +82,26 @@ zones = [160, 161, 162]
 Every zone ID may appear only once, and 255 is not allowed (it means "skip"
 on the wire). A definition with an unknown field is rejected, so a typo does
 not get silently ignored.
+
+### Cluster devices
+
+A device without `0x8081` sets `lighting = "clusters"` and lists one light per
+`0x8071` cluster in place of keys. `zone` is the cluster index from the probe's
+`0x8071 cluster N` lines, and Loginux paints each light with that cluster's
+Static effect. Such a definition has no `unknown` and no `[[strip]]`. The probe
+prints no starting definition for it, so write the file from those lines.
+
+```toml
+lighting = "clusters"
+lights = [
+  { name = "logo", zone = 1, at = [1.25, 3], size = [1.5, 1.5] },
+]
+```
+
+When the sixth byte of a cluster's probe line is not `00`, the cluster is a
+status display, like the DPI LEDs of a G903. Its firmware decides which LEDs
+are on, and it can stay dark while Loginux holds the lighting. Say so in the
+file's comments; [research/g903.md](research/g903.md) has the evidence.
 
 ## Adding a protocol
 

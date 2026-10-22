@@ -3,8 +3,9 @@
 //! Write boundary: `ALLOWED` lists every request this program can send. SetEffect
 //! always carries persistence 0x01 (apply in RAM, flash-save bit clear) and
 //! FrameEnd carries 0x00, so no lighting request can ask the keyboard to write
-//! its flash. The one device-setting write is the report rate (0x8061/3): it is
-//! sent only when the user asks for a rate, the keyboard may keep it, and the
+//! its flash; manageNvConfig (0x8071/3) passes only in its get form, because its
+//! set form writes EEPROM. The one device-setting write is the report rate
+//! (0x8061/3): it is sent only when the user asks for a rate, the keyboard may keep it, and the
 //! USB device can re-enumerate. Brightness and game mode are read only. DFU,
 //! reset and engineering features are never resolved or called.
 
@@ -32,6 +33,7 @@ const ALLOWED: &[(u16, u8)] = &[
     (RGB_EFFECTS, 0), // getInfo
     (RGB_EFFECTS, 1), // setEffect, RAM only
     (RGB_EFFECTS, 5), // get/set software control
+    (RGB_EFFECTS, 3), // manageNvConfig: get only, see GET_ONLY
     (PER_KEY, 0),     // getInfo: supported-zone bitmap
     (PER_KEY, 1),     // setIndividualRgbZones: stage colours
     (PER_KEY, 7),     // frameEnd: commit the staged frame
@@ -51,6 +53,10 @@ const ALLOWED: &[(u16, u8)] = &[
     (ONBOARD_PROFILES, 0),  // getInfo
     (ONBOARD_PROFILES, 2),  // getOnboardMode
 ];
+
+/// Functions whose first parameter picks get (0x00) or set, where the set form
+/// writes non-volatile memory: only the get form passes.
+const GET_ONLY: &[(u16, u8)] = &[(RGB_EFFECTS, 3)];
 
 /// Names of common HID++ 2.0 features, after Solaar's table; for `loginux probe`.
 const FEATURE_NAMES: &[(u16, &str)] = &[
@@ -122,7 +128,14 @@ pub fn probe(path: &Path) -> Result<Probe, Error> {
     let io = Hidpp::open_unchecked(path, 0xFF)?;
     let (vendor, product, interface, hid_name) = io.identity(path).ok_or_else(|| Error::WrongDevice(path.into()))?;
     // The model is unused by these reads; any definition will do.
-    let mut kb = Keyboard { io, path: path.into(), model: &crate::layout::models()[0], rgb: 0, per_key: 0, optional: Optional::default() };
+    let mut kb = Keyboard {
+        io,
+        path: path.into(),
+        model: &crate::layout::models()[0],
+        rgb: 0,
+        per_key: 0,
+        optional: Optional::default(),
+    };
     let protocol = kb.protocol()?;
     let rgb = kb.feature(RGB_EFFECTS)?;
     let per_key = kb.feature(PER_KEY)?;
@@ -148,6 +161,17 @@ pub fn probe(path: &Path) -> Result<Probe, Error> {
                 let r = kb.call(RGB_EFFECTS, index, 0, &[cluster, e, 0])?;
                 lighting.push(format!("0x8071 cluster {cluster} effect {e}: {}", hex(&r[..10])));
             }
+        }
+        // manageNvConfig get for each non-volatile capability the device lists;
+        // 0x0008 eventsDisplay decides when DPI-status LEDs light.
+        let nv = u16::from_be_bytes([info[3], info[4]]);
+        for cap in (0..16).map(|bit| 1u16 << bit).filter(|cap| nv & cap != 0) {
+            let [hi, lo] = cap.to_be_bytes();
+            let line = match kb.call(RGB_EFFECTS, index, 3, &[0, hi, lo]) {
+                Ok(r) => hex(&r[..10]),
+                Err(e) => e.to_string(),
+            };
+            lighting.push(format!("0x8071 nv config {cap:#06x}: {line}"));
         }
     }
     if let Some(index) = kb.feature(COLOR_LED_EFFECTS)? {
@@ -191,10 +215,18 @@ pub fn probe(path: &Path) -> Result<Probe, Error> {
 
 impl Keyboard {
     pub fn open(path: &Path, model: &'static Model) -> Result<Self, Error> {
-        let mut kb =
-            Keyboard { io: Hidpp::open(path, model)?, path: path.into(), model, rgb: 0, per_key: 0, optional: Optional::default() };
+        let mut kb = Keyboard {
+            io: Hidpp::open(path, model)?,
+            path: path.into(),
+            model,
+            rgb: 0,
+            per_key: 0,
+            optional: Optional::default(),
+        };
         kb.rgb = kb.feature(RGB_EFFECTS)?.ok_or(Error::Unsupported(RGB_EFFECTS))?;
-        kb.per_key = kb.feature(PER_KEY)?.ok_or(Error::Unsupported(PER_KEY))?;
+        if model.per_key {
+            kb.per_key = kb.feature(PER_KEY)?.ok_or(Error::Unsupported(PER_KEY))?;
+        }
         kb.optional = Optional {
             brightness: kb.feature(BRIGHTNESS)?,
             report_rate: kb.feature(REPORT_RATE)?,
@@ -210,7 +242,8 @@ impl Keyboard {
 
     fn call(&mut self, feature: u16, index: u8, function: u8, params: &[u8]) -> Result<[u8; 16], Error> {
         let what = Call { feature, function };
-        if !ALLOWED.contains(&(feature, function)) {
+        let set_form = GET_ONLY.contains(&(feature, function)) && params.first() != Some(&0);
+        if !ALLOWED.contains(&(feature, function)) || set_form {
             return Err(Error::Refused(what));
         }
         self.io.call(index, function, params, what)
@@ -296,6 +329,32 @@ impl Keyboard {
 
     pub fn set_sw_control(&mut self, mode: u8, flags: u8) -> Result<(), Error> {
         self.write(RGB_EFFECTS, self.rgb, 5, &[1, mode, flags]).map(drop)
+    }
+
+    /// Effect IDs each cluster lists, in effect-index order.
+    pub fn effect_ids(&mut self) -> Result<Vec<Vec<u16>>, Error> {
+        let clusters = self.call(RGB_EFFECTS, self.rgb, 0, &[0xFF, 0xFF, 0])?[2];
+        let mut all = vec![];
+        for cluster in 0..clusters {
+            let count = self.call(RGB_EFFECTS, self.rgb, 0, &[cluster, 0xFF, 0])?[4];
+            let mut ids = vec![];
+            for i in 0..count {
+                let r = self.call(RGB_EFFECTS, self.rgb, 0, &[cluster, i, 0])?;
+                ids.push(u16::from_be_bytes([r[2], r[3]]));
+            }
+            all.push(ids);
+        }
+        Ok(all)
+    }
+
+    /// Any listed effect on one cluster, applied in RAM (persistence 0x01).
+    pub fn set_effect(&mut self, cluster: u8, index: u8, params: [u8; 10]) -> Result<(), Error> {
+        let mut msg = [0u8; 13];
+        msg[0] = cluster;
+        msg[1] = index;
+        msg[2..12].copy_from_slice(&params);
+        msg[12] = PERSIST_RAM;
+        self.write(RGB_EFFECTS, self.rgb, 1, &msg).map(drop)
     }
 
     /// Static colour on one cluster, applied in RAM.

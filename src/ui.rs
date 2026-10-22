@@ -1708,10 +1708,8 @@ fn strip(p: &Painter, r: Rect, model: &Model, prof: &Profile) {
 /// Each group's most common colour becomes its base; overrides that match their
 /// base are dropped, so saved files stay short.
 fn normalize(model: &Model, p: &mut Profile) {
-    let groups: Vec<(String, Kind)> = std::iter::once(("keys".to_string(), Kind::Key))
-        .chain(model.strips.iter().map(|s| (s.name.clone(), Kind::Strip)))
-        .collect();
-    for (group, _) in groups {
+    let groups: Vec<String> = model.groups().into_iter().map(String::from).collect();
+    for group in groups {
         let ids: Vec<u8> = model.zones.iter().filter(|z| z.group == group).map(|z| z.id).collect();
         let colours: Vec<(u8, Rgb)> = ids.iter().map(|&id| (id, p.colour(model, id).unwrap_or_default())).collect();
         let mut counts: Vec<(Rgb, usize)> = vec![];
