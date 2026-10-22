@@ -55,10 +55,10 @@ build() {
 
 check() {
   cd "$_pkgname"
+  # makepkg runs every function in one shell, so this inherits build()'s
+  # RUSTFLAGS and reuses its compiled dependencies; do not set them again.
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
-  # The same flags as build(), so the tests reuse its compiled dependencies.
-  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/build"
   cargo test --frozen --release
 }
 
