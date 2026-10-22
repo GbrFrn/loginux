@@ -108,7 +108,12 @@ impl Profile {
             out += &format!("\n{}", e.to_table());
         }
         for group in model.groups() {
-            out += &format!("\n[{group}]\nbase = \"{}\"\n", hex(self.base(group)));
+            // Every table is listed, but a base only when the profile sets one, so
+            // parsing the text gives back this profile exactly.
+            out += &format!("\n[{group}]\n");
+            if let Some(c) = self.bases.get(group) {
+                out += &format!("base = \"{}\"\n", hex(*c));
+            }
             for z in model.zones.iter().filter(|z| z.group == group) {
                 if let Some(c) = self.zones.get(&z.id) {
                     out += &format!("{} = \"{}\"\n", z.name, hex(*c));
