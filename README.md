@@ -18,9 +18,10 @@ repainting the keyboard by itself after an unplug and replug, live colour
 edits from the editor without visible flicker or lag, and the onboard lighting
 returning when the service stopped. A channel check of all 133 zones found
 every key and bar segment where the definition puts it; the 8 unknown zones
-lit nothing. Not yet observed: re-enumeration after a report-rate change,
-whether the keyboard keeps a rate across a replug, the tray icon, and an
-install from the package.
+lit nothing. On CachyOS with Plasma 6.8 the package installed cleanly, the
+service's tray icon named the keyboard and its profile, and a left click on it
+opened the editor. Not yet observed: re-enumeration after a report-rate change,
+and whether the keyboard keeps a rate across a replug.
 [`research/`](research/README.md) records the evidence and its labels.
 
 ## Supported devices
