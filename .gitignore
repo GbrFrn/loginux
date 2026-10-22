@@ -13,3 +13,9 @@
 
 # Local handoff prompts
 /BUILDER_HANDOFF_*.md
+
+# makepkg output when building from packaging/aur
+packaging/aur/src/
+packaging/aur/pkg/
+packaging/aur/loginux/
+*.pkg.tar.zst
