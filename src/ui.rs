@@ -362,6 +362,9 @@ struct App {
     hosted: Option<Hosted>,
     device: Option<PathBuf>,
     host_tried: Option<Instant>,
+    /// When this window asked systemd to start the service; no engine is hosted
+    /// here while the service may still be starting.
+    service_start: Option<Instant>,
     status: Option<Result<Status, String>>,
     tab: Tab,
     names: Vec<String>,
@@ -405,6 +408,7 @@ impl App {
             hosted,
             device,
             host_tried: None,
+            service_start: None,
             status: Some(ipc::request(&Request::Status).map_err(String::from)),
             tab: Tab::Edit,
             names: vec![],
@@ -449,15 +453,25 @@ impl App {
     }
 
     fn set_service(&mut self, on: bool) {
-        let slot = self.service.clone();
-        let (verb, link) = (if on { "enable" } else { "disable" }, self.link.clone());
+        if on {
+            // An engine in this window holds the lock the service needs: hand over.
+            self.hosted = None;
+            self.service_start = Some(Instant::now());
+        }
+        self.systemctl(&[if on { "enable" } else { "disable" }, "--now"]);
+    }
+
+    /// Runs `systemctl --user ARGS loginux.service` off the UI thread; a failure
+    /// shows as a notice, and the service state is read again afterwards.
+    fn systemctl(&self, args: &[&'static str]) {
+        let (slot, link, args) = (self.service.clone(), self.link.clone(), args.to_vec());
         thread::spawn(move || {
-            let out = Command::new("systemctl").args(["--user", verb, "--now", "loginux.service"]).output();
+            let out = Command::new("systemctl").arg("--user").args(&args).arg("loginux.service").output();
             if let Ok(o) = &out
                 && !o.status.success()
             {
                 let mut b = link.0.0.lock().expect("link lock");
-                b.errors.push(format!("systemctl --user {verb}: {}", String::from_utf8_lossy(&o.stderr).trim()));
+                b.errors.push(format!("systemctl --user {}: {}", args.join(" "), String::from_utf8_lossy(&o.stderr).trim()));
             }
             *slot.lock().expect("service lock") = service_state();
         });
@@ -586,8 +600,25 @@ impl App {
         {
             self.notice = Some((format!("The connected keyboard is a {name}; restart loginux to edit it."), AMBER));
         }
-        if engine_down && self.hosted.is_none() && self.host_tried.is_none_or(|t| t.elapsed() > Duration::from_secs(2)) {
+        let service_starting = self.service_start.is_some_and(|t| t.elapsed() < Duration::from_secs(6));
+        if engine_down
+            && self.hosted.is_none()
+            && !service_starting
+            && self.host_tried.is_none_or(|t| t.elapsed() > Duration::from_secs(2))
+        {
             self.host_tried = Some(Instant::now());
+            let service = *self.service.lock().expect("service lock");
+            // An enabled service that is not running (quit from the tray, say) is
+            // started once, which brings the tray back; only a disabled or missing
+            // service, or one that failed to start, leaves the engine to this window.
+            if service == Service::Unknown {
+                return; // systemd has not answered yet
+            }
+            if service == Service::Enabled && self.service_start.is_none() {
+                self.service_start = Some(Instant::now());
+                self.systemctl(&["start"]);
+                return;
+            }
             if let Some(Err(e)) = &self.status {
                 eprintln!("loginux: {e}; starting an engine in this window");
             }
