@@ -3,10 +3,11 @@
 //! big-endian, as documented by Solaar's LED effect table (static evidence);
 //! each device lists which effect IDs its clusters accept.
 
-use crate::profile::{Rgb, parse_rgb};
+use crate::profile::{Rgb, hex, parse_rgb};
+use serde::{Deserialize, Serialize};
 
 /// One effect with its parameters, ready to encode.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Effect {
     pub kind: Kind,
     pub color: Rgb,
@@ -20,7 +21,8 @@ pub struct Effect {
     pub direction: u8,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Kind {
     Static,
     Cycle,
@@ -29,7 +31,30 @@ pub enum Kind {
     Ripple,
 }
 
+/// Wave directions by name, in Solaar's numbering.
+pub const DIRECTIONS: [(&str, u8); 6] =
+    [("right", 1), ("left", 6), ("down", 2), ("up", 7), ("centre-out", 3), ("centre-in", 8)];
+
 impl Kind {
+    pub const ALL: [Kind; 5] = [Kind::Static, Kind::Breathe, Kind::Cycle, Kind::Wave, Kind::Ripple];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Static => "static",
+            Kind::Cycle => "cycle",
+            Kind::Breathe => "breathe",
+            Kind::Wave => "wave",
+            Kind::Ripple => "ripple",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Result<Kind, String> {
+        Kind::ALL
+            .into_iter()
+            .find(|k| k.name() == name)
+            .ok_or_else(|| format!("{name:?} is not an effect: static, breathe, cycle, wave or ripple"))
+    }
+
     /// Effect IDs that implement this kind, preferred first.
     fn ids(self) -> &'static [u16] {
         match self {
@@ -40,41 +65,93 @@ impl Kind {
             Kind::Ripple => &[0x17, 0x0B],
         }
     }
+
+    /// Whether a cluster listing `available` can run this kind.
+    pub fn on(self, available: &[u16]) -> bool {
+        self.ids().iter().any(|id| available.contains(id))
+    }
+
+    /// Whether the colour parameter means anything for this kind.
+    pub fn coloured(self) -> bool {
+        matches!(self, Kind::Static | Kind::Breathe | Kind::Ripple)
+    }
 }
 
 impl Effect {
-    /// "cycle", "wave,period=3000,direction=6", "breathe,color=ff0000"...
-    pub fn parse(text: &str) -> Result<Effect, String> {
-        let mut parts = text.split(',');
-        let kind = match parts.next().unwrap_or_default() {
-            "static" => Kind::Static,
-            "cycle" => Kind::Cycle,
-            "breathe" => Kind::Breathe,
-            "wave" => Kind::Wave,
-            "ripple" => Kind::Ripple,
-            other => return Err(format!("{other:?} is not an effect: static, cycle, breathe, wave or ripple")),
-        };
-        let mut e = Effect {
+    /// The kind with its default parameters.
+    pub fn new(kind: Kind) -> Effect {
+        Effect {
             kind,
             color: [0xFF; 3],
             period: if kind == Kind::Ripple { 20 } else { 5000 },
             intensity: 100,
             saturation: 255,
             direction: 1,
-        };
+        }
+    }
+
+    /// "cycle", "wave,period=3000,direction=left", "breathe,color=ff0000"...
+    pub fn parse(text: &str) -> Result<Effect, String> {
+        let mut parts = text.split(',');
+        let mut e = Effect::new(Kind::from_name(parts.next().unwrap_or_default())?);
         for part in parts {
             let (key, value) = part.split_once('=').ok_or_else(|| format!("{part:?} is not key=value"))?;
-            let num = |max: u32| value.parse::<u32>().ok().filter(|v| *v <= max).ok_or_else(|| format!("{key}={value} is out of range"));
-            match key {
-                "color" => e.color = parse_rgb(value)?,
-                "period" => e.period = num(u16::MAX.into())? as u16,
-                "intensity" => e.intensity = num(100)? as u8,
-                "saturation" => e.saturation = num(255)? as u8,
-                "direction" => e.direction = num(8)? as u8,
-                _ => return Err(format!("{key:?} is not an effect parameter")),
-            }
+            e.set(key, value)?;
         }
         Ok(e)
+    }
+
+    /// The `[effect]` table of a profile: `kind` and the same keys as `parse`.
+    pub fn from_table(table: &toml::Table) -> Result<Effect, String> {
+        let text = |v: &toml::Value| match v {
+            toml::Value::String(s) => Ok(s.clone()),
+            toml::Value::Integer(n) => Ok(n.to_string()),
+            other => Err(format!("{other} is neither text nor a whole number")),
+        };
+        let kind = table.get("kind").ok_or("[effect] needs a kind: breathe, cycle, wave, ripple or static")?;
+        let mut e = Effect::new(Kind::from_name(&text(kind)?)?);
+        for (key, value) in table.iter().filter(|(k, _)| *k != "kind") {
+            e.set(key, &text(value).map_err(|err| format!("[effect] {key}: {err}"))?)
+                .map_err(|err| format!("[effect] {err}"))?;
+        }
+        Ok(e)
+    }
+
+    /// The `[effect]` table, with only the keys that matter for the kind.
+    pub fn to_table(&self) -> String {
+        let mut out = format!("[effect]\nkind = \"{}\"\n", self.kind.name());
+        if self.kind.coloured() {
+            out += &format!("color = \"{}\"\n", hex(self.color));
+        }
+        if self.kind != Kind::Static {
+            out += &format!("period = {}\n", self.period);
+        }
+        if self.kind == Kind::Wave {
+            out += &format!("direction = \"{}\"\n", self.direction_name());
+        }
+        out
+    }
+
+    pub fn direction_name(&self) -> &'static str {
+        DIRECTIONS.iter().find(|d| d.1 == self.direction).map_or("right", |d| d.0)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<(), String> {
+        let num = |max: u32| value.parse::<u32>().ok().filter(|v| *v <= max).ok_or_else(|| format!("{key}={value} is out of range"));
+        match key {
+            "color" => self.color = parse_rgb(value)?,
+            "period" => self.period = num(u16::MAX.into())? as u16,
+            "intensity" => self.intensity = num(100)? as u8,
+            "saturation" => self.saturation = num(255)? as u8,
+            "direction" => {
+                self.direction = match DIRECTIONS.iter().find(|d| d.0 == value) {
+                    Some(d) => d.1,
+                    None => num(8)? as u8,
+                }
+            }
+            _ => return Err(format!("{key:?} is not an effect parameter")),
+        }
+        Ok(())
     }
 
     /// The effect ID to use among those a cluster lists, and its 10 parameter bytes.
@@ -131,11 +208,18 @@ mod tests {
 
     #[test]
     fn layouts_follow_solaar() {
-        let wave = Effect::parse("wave,period=3000,direction=6").unwrap();
+        let wave = Effect::parse("wave,period=3000,direction=left").unwrap();
         assert_eq!(wave.encode(&[0x01, 0x16]).unwrap(), (0x16, [0, 255, 0, 0, 0, 0, 0x0b, 0xb8, 100, 6]));
         let cycle = Effect::parse("cycle").unwrap();
         assert_eq!(cycle.encode(&[0x03]).unwrap(), (0x03, [0, 0, 0, 0, 0, 0x13, 0x88, 100, 0, 0]));
         assert!(Effect::parse("ripple").unwrap().encode(&[0x01, 0x03]).is_err());
         assert!(Effect::parse("glow").is_err());
+    }
+
+    #[test]
+    fn table_round_trips() {
+        let e = Effect::parse("wave,period=2500,direction=up").unwrap();
+        let doc: toml::Table = e.to_table().parse().unwrap();
+        assert_eq!(Effect::from_table(doc["effect"].as_table().unwrap()).unwrap(), e);
     }
 }

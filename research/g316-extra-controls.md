@@ -30,6 +30,12 @@ engine must treat that disconnect as expected for an explicit change, then
 rediscover interface 2 and reapply any active RAM-only lighting profile. A
 failed reconnect is an error to show, not a reason to loop rate writes.
 
+On Linux the keyboard refused 8000 Hz (live, 2026-10-22). Loginux sent
+`0x8061/3 [06]`, the request G HUB sent, while the keyboard ran at 1000 Hz on
+a 480 Mbps link, and the reply was error 2, invalid argument. It still lists
+8000 Hz as supported afterwards. The cause is unknown, so 8000 Hz counts as
+unconfirmed on Linux; 2000 and 4000 Hz have not been tried.
+
 Rate selection must be an explicit user action. Do not put it in a lighting
 profile or send it automatically at startup, login, or after every replug.
 The current rate may be a saved device setting; its persistence has not been

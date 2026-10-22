@@ -35,7 +35,17 @@ pub enum Request {
 pub enum Device {
     Missing,
     NoAccess { error: String },
-    Connected { keyboard: String, name: String, path: String, protocol: String, layout: Option<u8>, zones: Vec<u8> },
+    Connected {
+        keyboard: String,
+        name: String,
+        path: String,
+        protocol: String,
+        layout: Option<u8>,
+        zones: Vec<u8>,
+        /// Built-in effects the device can run: breathe, cycle, wave, ripple.
+        #[serde(default)]
+        effects: Vec<String>,
+    },
     Failed { error: String },
 }
 

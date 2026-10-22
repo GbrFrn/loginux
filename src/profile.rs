@@ -6,6 +6,7 @@
 //!   checks/ID.toml       what lit up during channel checks, per keyboard model
 //!   devices/ID.toml      the user's own device definitions (see layout.rs)
 
+use crate::effects::Effect;
 use crate::layout::{self, Kind, Model};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -31,15 +32,27 @@ pub fn hex([r, g, b]: Rgb) -> String {
 /// A colour for every key, light and strip segment. `bases` holds the colour of
 /// each group ("keys", "lights", and each strip by name, e.g. "bar"); `zones`
 /// overrides single zones. Unknown zones are lit only when `zones` names them.
+/// With `effect`, the device runs that built-in effect instead of the colours.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Profile {
     pub bases: BTreeMap<String, Rgb>,
     pub zones: BTreeMap<u8, Rgb>,
+    #[serde(default)]
+    pub effect: Option<Effect>,
 }
+
+/// Built-in presets, effects the device runs itself. A profile file of the same
+/// name replaces one.
+const PRESETS: &[(&str, &str)] = &[
+    ("Breathing", "[effect]\nkind = \"breathe\"\ncolor = \"#ff2e3f\"\nperiod = 4000\n"),
+    ("Colour Cycle", "[effect]\nkind = \"cycle\"\nperiod = 10000\n"),
+    ("Wave", "[effect]\nkind = \"wave\"\nperiod = 3000\ndirection = \"right\"\n"),
+    ("Ripple", "[effect]\nkind = \"ripple\"\ncolor = \"#ff2e3f\"\nperiod = 20\n"),
+];
 
 impl Profile {
     /// Parses a profile for `model`: one table per group ([keys], [lights], each
-    /// strip) and [zones].
+    /// strip), [zones] and [effect].
     pub fn parse(model: &Model, text: &str) -> Result<Self, String> {
         let doc: toml::Table = text.parse().map_err(|e: toml::de::Error| e.to_string())?;
         let mut p = Profile::default();
@@ -47,9 +60,13 @@ impl Profile {
         let groups = model.groups();
         for (section, value) in &doc {
             let table = value.as_table().ok_or_else(|| format!("{section} must be a [{section}] table"))?;
+            if section == "effect" {
+                p.effect = Some(Effect::from_table(table)?);
+                continue;
+            }
             if section != "zones" && !groups.contains(&section.as_str()) {
                 let tables: Vec<String> = groups.iter().map(|g| format!("[{g}]")).collect();
-                return Err(format!("unknown section [{section}]; the {} takes {} and [zones]", model.name, tables.join(", ")));
+                return Err(format!("unknown section [{section}]; the {} takes {}, [zones] and [effect]", model.name, tables.join(", ")));
             }
             for (key, value) in table {
                 let at = format!("[{section}] {key}");
@@ -84,8 +101,12 @@ impl Profile {
         let mut out = String::from(
             "# Loginux lighting profile. Colours are #rrggbb.\n\
              # base fills every key, light or strip segment of its table that is not listed.\n\
-             # [zones] takes raw zone IDs; it is the only way to light the unknown zones.\n",
+             # [zones] takes raw zone IDs; it is the only way to light the unknown zones.\n\
+             # [effect], when present, has the device run one of its own effects instead.\n",
         );
+        if let Some(e) = &self.effect {
+            out += &format!("\n{}", e.to_table());
+        }
         for group in model.groups() {
             out += &format!("\n[{group}]\nbase = \"{}\"\n", hex(self.base(group)));
             for z in model.zones.iter().filter(|z| z.group == group) {
@@ -167,8 +188,18 @@ pub fn read(model: &Model, path: &Path) -> Result<Profile, String> {
     Profile::parse(model, &text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// A profile by name: its file, or the built-in preset of that name.
 pub fn load(model: &Model, name: &str) -> Result<Profile, String> {
-    read(model, &path(name)?)
+    let file = path(name)?;
+    match PRESETS.iter().find(|p| p.0 == name) {
+        Some((_, text)) if !file.exists() => Profile::parse(model, text),
+        _ => read(model, &file),
+    }
+}
+
+/// A built-in preset that no profile file replaces.
+pub fn built_in(name: &str) -> bool {
+    PRESETS.iter().any(|p| p.0 == name) && path(name).is_ok_and(|f| !f.exists())
 }
 
 /// A profile by name, or from a file when the argument looks like a path.
@@ -181,6 +212,9 @@ pub fn save(model: &Model, name: &str, profile: &Profile) -> Result<(), String> 
 }
 
 pub fn delete(name: &str) -> Result<(), String> {
+    if built_in(name) {
+        return Err(format!("{name} is built in"));
+    }
     fs::remove_file(path(name)?).map_err(|e| e.to_string())
 }
 
@@ -192,6 +226,8 @@ pub fn list() -> Vec<String> {
         .filter(|n| valid_name(n))
         .collect();
     names.sort_by_key(|n| n.to_lowercase());
+    let presets: Vec<String> = PRESETS.iter().map(|p| p.0.to_string()).filter(|n| !names.contains(n)).collect();
+    names.extend(presets);
     names
 }
 

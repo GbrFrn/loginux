@@ -166,6 +166,26 @@ key (0, 47, 99–103 and 154 on the G316) stay dark unless `[zones]` names
 them. Hand edits to the chosen profile apply within a second while the engine
 runs.
 
+### Effects
+
+A profile with an `[effect]` table has the device run one of its own effects
+in place of the colours:
+
+```toml
+[effect]
+kind = "wave"         # breathe, cycle, wave or ripple
+period = 3000         # milliseconds per cycle (breathe, cycle, wave)
+direction = "right"   # wave: right, left, up, down, centre-out, centre-in
+color = "#ff2e3f"     # breathe and ripple
+```
+
+Four presets are built in: Breathing, Colour Cycle, Wave and Ripple. They
+show in the editor (marked BUILT IN), in the tray's Profile menu and to
+`loginux use`. In the editor, LIGHTING switches the open profile between its
+colours and an effect; a changed preset is saved under a new name. A cluster
+without the chosen effect shows the effect's colour instead, and a device
+with none of it refuses the profile: the G903 has no wave or ripple.
+
 ## Run at login
 
 The package installs the user service. From source, copy it first:

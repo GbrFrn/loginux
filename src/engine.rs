@@ -10,6 +10,7 @@
 //! overwriting it.
 
 use crate::device::{Event, Keyboard, RATES_HZ};
+use crate::effects::{self, Effect};
 use crate::hidpp::{self, Error};
 use crate::ipc::{self, Control, Controls, Device, RateChange, Reply, Request, Status};
 use crate::layout::{self, Kind, Model};
@@ -103,6 +104,8 @@ pub struct Held {
     pub state: (u8, u8),
     base: Option<Rgb>,
     frame: Vec<(u8, Rgb)>,
+    /// The built-in effect the device is running for us, if any.
+    effect: Option<Effect>,
 }
 
 pub enum TakeError {
@@ -171,7 +174,7 @@ pub fn take(kb: &mut Keyboard, force: bool) -> Result<Held, TakeError> {
     sleep(SETTLE); // let the LED task apply the claim before SetEffect
     let state = kb.sw_control()?;
     write_marker(&id, restore, Some(state));
-    Ok(Held { restore, state, base: None, frame: vec![] })
+    Ok(Held { restore, state, base: None, frame: vec![], effect: None })
 }
 
 /// Static `base` on every cluster, then the frame twice: the first frame after a
@@ -202,6 +205,42 @@ pub fn update(kb: &mut Keyboard, statics: &[(u8, u8)], frame: &[(u8, Rgb)]) -> R
     Ok(())
 }
 
+/// Clusters an effect runs on: every cluster of a per-key device, and the
+/// definition's own clusters on a clusters device.
+fn targets(model: &Model, clusters: usize) -> impl Iterator<Item = usize> + '_ {
+    (0..clusters).filter(move |&c| model.per_key || model.zone(c as u8).is_some())
+}
+
+/// Starts `effect` on its clusters, in RAM. A cluster without that kind of
+/// effect shows the effect's colour as Static instead.
+pub fn play(kb: &mut Keyboard, lists: &[Vec<u16>], statics: &[(u8, u8)], effect: &Effect) -> Result<(), Error> {
+    for c in targets(kb.model, lists.len()).collect::<Vec<_>>() {
+        let ids = &lists[c];
+        match effect.encode(ids) {
+            Ok((id, params)) => {
+                let index = ids.iter().position(|&i| i == id).expect("encode picks a listed ID") as u8;
+                kb.set_effect(c as u8, index, params)?;
+            }
+            Err(_) => {
+                if let Some(&s) = statics.iter().find(|s| usize::from(s.0) == c) {
+                    kb.set_static(s, effect.color)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Effect kinds at least one of the clusters can run, by name; Static is left
+/// out because per-key colours cover it.
+fn effect_names(model: &Model, lists: &[Vec<u16>]) -> Vec<String> {
+    effects::Kind::ALL
+        .into_iter()
+        .filter(|k| *k != effects::Kind::Static && targets(model, lists.len()).any(|c| k.on(&lists[c])))
+        .map(|k| k.name().to_string())
+        .collect()
+}
+
 /// Zones the device accepts: the 0x8081 bitmap, or the clusters on a clusters device.
 pub fn zones(kb: &mut Keyboard, statics: &[(u8, u8)]) -> Result<Vec<u8>, Error> {
     if kb.model.per_key { kb.zones() } else { Ok(statics.iter().map(|s| s.0).collect()) }
@@ -223,8 +262,13 @@ pub fn release_now(kb: &mut Keyboard) -> Result<(u8, u8), Error> {
 
 // ---- engine ----------------------------------------------------------------
 
-/// Static base colour and the per-zone frame.
-type Paint = (Rgb, Vec<(u8, Rgb)>);
+/// What the device should show.
+enum Look {
+    /// Static base colour and the per-zone frame.
+    Colours(Rgb, Vec<(u8, Rgb)>),
+    /// A built-in effect the device runs itself.
+    Effect(Effect),
+}
 
 pub struct Options {
     pub device: Option<PathBuf>,
@@ -236,6 +280,8 @@ struct Link {
     kb: Keyboard,
     zones: Vec<u8>,
     statics: Vec<(u8, u8)>,
+    /// Effect IDs each cluster lists.
+    effects: Vec<Vec<u16>>,
     held: Option<Held>,
     conflict: Option<(u8, u8)>,
     next_check: Instant,
@@ -445,7 +491,12 @@ impl Engine {
                 Ok(())
             }
             Err(e) => {
-                let error = e.to_string();
+                let stays = RATES_HZ.get(usize::from(current)).map_or_else(String::new, |r| format!("; it stays at {r} Hz"));
+                let error = match e {
+                    Error::Device(_, code) => format!("the keyboard refused {hz} Hz (HID++ error {code:#04x}){stays}"),
+                    e => e.to_string(),
+                };
+                log(&format!("report-rate change refused: {error}"));
                 self.rate_change = Some(RateChange::Failed { hz, error: error.clone() });
                 Err(error)
             }
@@ -538,7 +589,7 @@ impl Engine {
         if self.active.as_ref().is_some_and(|(n, _, s)| *n == name && *s == stamp) {
             return;
         }
-        match profile::read(self.model, &path) {
+        match profile::load(self.model, &name) {
             Ok(p) => {
                 log(&format!("profile {name:?} loaded"));
                 self.active = Some((name, p, stamp));
@@ -568,12 +619,13 @@ impl Engine {
             let layout = kb.layout_code()?;
             let statics = kb.static_effects()?;
             let zones = zones(&mut kb, &statics)?;
+            let effects = kb.effect_ids()?;
             let (controls, rates) = read_controls(&mut kb)?;
-            Ok((kb, protocol, layout, zones, statics, controls, rates))
+            Ok((kb, protocol, layout, zones, statics, effects, controls, rates))
         });
         let now = Instant::now();
         match result {
-            Ok((kb, protocol, layout, zones, statics, controls, rates)) => {
+            Ok((kb, protocol, layout, zones, statics, effects, controls, rates)) => {
                 let path = kb.path.display().to_string();
                 let model = kb.model;
                 log(&format!("{} connected on {path}: HID++ {}.{}, {} zones", model.name, protocol.0, protocol.1, zones.len()));
@@ -596,6 +648,7 @@ impl Engine {
                     protocol: format!("{}.{}", protocol.0, protocol.1),
                     layout,
                     zones: zones.clone(),
+                    effects: effect_names(model, &effects),
                 };
                 self.message = None;
                 let current = rates.as_ref().map(|r| r.1);
@@ -603,6 +656,7 @@ impl Engine {
                     kb,
                     zones,
                     statics,
+                    effects,
                     held: None,
                     conflict: None,
                     next_check: now,
@@ -629,8 +683,8 @@ impl Engine {
         }
     }
 
-    /// What the keyboard should show: (static base, frame), or None for onboard lighting.
-    fn desired(&self, zones: &[u8]) -> Result<Option<Paint>, String> {
+    /// What the device should show, or None for its onboard lighting.
+    fn desired(&self, zones: &[u8], effects: &[Vec<u16>]) -> Result<Option<Look>, String> {
         if let Some((id, _)) = self.check {
             if !zones.contains(&id) {
                 return Err(format!("zone {id} is not reported by this keyboard"));
@@ -639,15 +693,21 @@ impl Engine {
             let model = self.model;
             let dark = zones.iter().filter(|&&z| model.zone(z).is_some_and(|z| z.kind != Kind::Unknown) && z != id);
             let frame = dark.map(|&z| (z, [0; 3])).chain([(id, [0xFF; 3])]).collect();
-            return Ok(Some(([0; 3], frame)));
+            return Ok(Some(Look::Colours([0; 3], frame)));
         }
-        let shown = self.preview.as_ref().map(|p| &p.0).or(self.active.as_ref().map(|a| &a.1));
-        shown.map(|p| Ok((p.base("keys"), p.frame(self.model, zones)?))).transpose()
+        let Some(p) = self.preview.as_ref().map(|p| &p.0).or(self.active.as_ref().map(|a| &a.1)) else { return Ok(None) };
+        match &p.effect {
+            Some(e) if !targets(self.model, effects.len()).any(|c| e.kind.on(&effects[c])) => {
+                Err(format!("the {} has no {} effect", self.model.name, e.kind.name()))
+            }
+            Some(e) => Ok(Some(Look::Effect(e.clone()))),
+            None => Ok(Some(Look::Colours(p.base("keys"), p.frame(self.model, zones)?))),
+        }
     }
 
     fn step(&mut self) -> Result<(), Error> {
-        let Some(zones) = self.link.as_ref().map(|l| l.zones.clone()) else { return Ok(()) };
-        let desired = match self.desired(&zones) {
+        let Some((zones, effects)) = self.link.as_ref().map(|l| (l.zones.clone(), l.effects.clone())) else { return Ok(()) };
+        let desired = match self.desired(&zones, &effects) {
             Ok(d) => d,
             Err(e) => {
                 self.say(&e);
@@ -678,7 +738,7 @@ impl Engine {
         }
         let link = self.link.as_mut().expect("checked above");
 
-        let Some((base, frame)) = desired else {
+        let Some(look) = desired else {
             if let Some(h) = link.held.take() {
                 let after = give_back(&mut link.kb, h.restore)?;
                 log(&format!("lighting handed back to the keyboard (software control now {:02x} {:02x})", after.0, after.1));
@@ -728,15 +788,29 @@ impl Engine {
 
         let Some(h) = link.held.as_mut() else { return Ok(()) };
         let refresh_due = link.next_refresh.is_some_and(|t| now >= t);
-        if h.base != Some(base) {
-            paint(&mut link.kb, &link.statics, base, &frame)?;
-            h.base = Some(base);
-            h.frame = frame;
-        } else if h.frame != frame || refresh_due {
-            update(&mut link.kb, &link.statics, &frame)?;
-            h.frame = frame;
-        } else {
-            return Ok(());
+        match look {
+            Look::Effect(e) => {
+                // The device keeps an effect running; a refresh would only restart it.
+                if h.effect.as_ref() == Some(&e) {
+                    return Ok(());
+                }
+                play(&mut link.kb, &link.effects, &link.statics, &e)?;
+                h.effect = Some(e);
+                (h.base, h.frame) = (None, vec![]); // colours repaint in full after an effect
+            }
+            Look::Colours(base, frame) => {
+                if h.base != Some(base) {
+                    paint(&mut link.kb, &link.statics, base, &frame)?;
+                    h.base = Some(base);
+                    h.frame = frame;
+                } else if h.frame != frame || refresh_due {
+                    update(&mut link.kb, &link.statics, &frame)?;
+                    h.frame = frame;
+                } else {
+                    return Ok(());
+                }
+                h.effect = None;
+            }
         }
         link.next_refresh = refresh.map(|r| now + r);
         Ok(())

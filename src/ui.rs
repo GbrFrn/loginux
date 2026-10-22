@@ -7,6 +7,7 @@
 //! display scale. Antialiasing (feathering) is off for the same reason: every
 //! shape is a pixel-aligned rectangle.
 
+use crate::effects::{self as fx, Effect};
 use crate::engine::{self, Hosted, STOP};
 use crate::ipc::{self, Control, Device, RateChange, Request, Status};
 use crate::layout::{self, Kind, Model, Zone};
@@ -365,6 +366,8 @@ struct App {
     tab: Tab,
     names: Vec<String>,
     cache: BTreeMap<String, Profile>,
+    /// Names in `names` that are built-in presets with no file of their own.
+    built_in: BTreeSet<String>,
     open: Option<String>,
     saved: Profile,
     work: Profile,
@@ -406,6 +409,7 @@ impl App {
             tab: Tab::Edit,
             names: vec![],
             cache: BTreeMap::new(),
+            built_in: BTreeSet::new(),
             open: None,
             saved: Profile::default(),
             work: Profile::default(),
@@ -462,6 +466,7 @@ impl App {
     fn reload_list(&mut self) {
         self.names = profile::list();
         self.cache = self.names.iter().filter_map(|n| Some((n.clone(), profile::load(self.model, n).ok()?))).collect();
+        self.built_in = self.names.iter().filter(|n| profile::built_in(n)).cloned().collect();
     }
 
     fn dirty(&self) -> bool {
@@ -513,7 +518,11 @@ impl App {
         self.work.colour(self.model, id)
     }
 
+    /// The colours the picker edits: the selection's, or the running effect's.
     fn selection_colours(&self) -> Vec<Rgb> {
+        if let Some(e) = &self.work.effect {
+            return vec![e.color];
+        }
         let mut seen: Vec<Rgb> = vec![];
         for &id in &self.selection {
             let c = self.colour(id).unwrap_or([0; 3]);
@@ -535,8 +544,12 @@ impl App {
     }
 
     fn paint_selection(&mut self, c: Rgb) {
-        for &id in &self.selection {
-            self.work.zones.insert(id, c);
+        if let Some(e) = &mut self.work.effect {
+            e.color = c;
+        } else {
+            for &id in &self.selection {
+                self.work.zones.insert(id, c);
+            }
         }
         self.touched = true;
         self.hex_text = profile::hex(c);
@@ -674,7 +687,13 @@ impl App {
         egui::ScrollArea::vertical().max_height(ui.available_height() - 210.0).show(ui, |ui| {
             for name in &names {
                 let is_open = self.open.as_deref() == Some(name.as_str());
-                let mark = if active.as_deref() == Some(name.as_str()) { "IN USE" } else { "" };
+                let mark = if active.as_deref() == Some(name.as_str()) {
+                    "IN USE"
+                } else if self.built_in.contains(name) {
+                    "BUILT IN"
+                } else {
+                    ""
+                };
                 if self.profile_box(ui, name, is_open, mark).clicked() && !is_open {
                     if self.dirty() {
                         self.confirm = Some(Confirm::Switch(name.clone()));
@@ -821,12 +840,17 @@ impl App {
         if self.tab == Tab::Device {
             return self.device_notes(ui);
         }
-        // Room is kept for the palette's header and one row, so it never vanishes on a short window.
-        let height = ui.available_height() - 124.0 - 80.0;
-        egui::ScrollArea::vertical().max_height(height.max(80.0)).auto_shrink([false, true]).show(ui, |ui| self.specimen(ui));
-        ui.add_space(6.0);
-        let room = ui.max_rect().max.y - 124.0 - ui.cursor().min.y;
-        self.palette(ui, room);
+        if self.open.is_some() && self.work.effect.is_some() {
+            let height = ui.available_height() - 124.0;
+            egui::ScrollArea::vertical().max_height(height.max(80.0)).auto_shrink([false, true]).show(ui, |ui| self.effect_panel(ui));
+        } else {
+            // Room is kept for the palette's header and one row, so it never vanishes on a short window.
+            let height = ui.available_height() - 124.0 - 80.0;
+            egui::ScrollArea::vertical().max_height(height.max(80.0)).auto_shrink([false, true]).show(ui, |ui| self.specimen(ui));
+            ui.add_space(6.0);
+            let room = ui.max_rect().max.y - 124.0 - ui.cursor().min.y;
+            self.palette(ui, room);
+        }
 
         // Actions, pinned to the bottom.
         let max = ui.max_rect();
@@ -869,6 +893,97 @@ impl App {
         } else {
             self.picker(ui);
         }
+    }
+
+    /// The right column while the device runs an effect: what it does and its settings.
+    fn effect_panel(&mut self, ui: &mut Ui) {
+        let Some(e) = self.work.effect.clone() else { return };
+        label(ui, "EFFECT", LABEL_PX, LABEL);
+        ui.add_space(2.0);
+        label(ui, &e.kind.name().to_uppercase(), HEX, TEXT);
+        ui.add_space(4.0);
+        body(ui, effect_note(e.kind), TEXT2, 13.0);
+        ui.add_space(12.0);
+        if e.kind.coloured() {
+            label(ui, "COLOUR", LABEL_PX, LABEL);
+            ui.add_space(2.0);
+            self.picker(ui);
+            ui.add_space(12.0);
+        }
+        if matches!(e.kind, fx::Kind::Breathe | fx::Kind::Cycle | fx::Kind::Wave) {
+            let mut secs = f32::from(e.period) / 1000.0;
+            ui.horizontal(|ui| {
+                label(ui, "SECONDS PER CYCLE", LABEL_PX, LABEL);
+                ui.add(egui::DragValue::new(&mut secs).range(1.0..=20.0).speed(0.05).max_decimals(1));
+            });
+            let period = (secs * 1000.0).round() as u16;
+            if period != e.period
+                && let Some(w) = &mut self.work.effect
+            {
+                w.period = period;
+                self.touched = true;
+            }
+            ui.add_space(12.0);
+        }
+        if e.kind == fx::Kind::Wave {
+            label(ui, "DIRECTION", LABEL_PX, LABEL);
+            ui.add_space(2.0);
+            ui.horizontal_wrapped(|ui| {
+                for (name, n) in fx::DIRECTIONS {
+                    let text = name.replace('-', " ").to_uppercase();
+                    if e.direction == n {
+                        current_mark(ui, &text);
+                    } else if button(ui, &text, Look::Quiet, true).clicked()
+                        && let Some(w) = &mut self.work.effect
+                    {
+                        w.direction = n;
+                        self.touched = true;
+                    }
+                }
+            });
+        }
+    }
+
+    /// Per-key (or per-light) colours, or one of the device's own effects.
+    fn lighting_row(&mut self, ui: &mut Ui) {
+        let current = self.work.effect.as_ref().map(|e| e.kind);
+        let supported: Option<Vec<String>> = match self.status().map(|s| &s.device) {
+            Some(Device::Connected { effects, .. }) => Some(effects.clone()),
+            _ => None,
+        };
+        let name = self.model.name.clone();
+        ui.horizontal_wrapped(|ui| {
+            label(ui, "LIGHTING", LABEL_PX, LABEL);
+            ui.add_space(4.0);
+            let colours = colours_label(self.model);
+            if current.is_none() {
+                current_mark(ui, colours);
+            } else if button(ui, colours, Look::Quiet, true).clicked() {
+                self.work.effect = None;
+                self.touched = true;
+                self.sync_picker();
+            }
+            for kind in [fx::Kind::Breathe, fx::Kind::Cycle, fx::Kind::Wave, fx::Kind::Ripple] {
+                let text = kind.name().to_uppercase();
+                if current == Some(kind) {
+                    current_mark(ui, &text);
+                    continue;
+                }
+                let ok = supported.as_ref().is_none_or(|s| s.iter().any(|n| n == kind.name()));
+                let b = button(ui, &text, Look::Quiet, ok);
+                if !ok {
+                    b.on_hover_text(format!("The {name} has no {} effect", kind.name()));
+                } else if b.clicked() {
+                    let mut e = Effect::new(kind);
+                    if let Some(old) = &self.work.effect {
+                        e.color = old.color;
+                    }
+                    self.work.effect = Some(e);
+                    self.touched = true;
+                    self.sync_picker();
+                }
+            }
+        });
     }
 
     fn picker(&mut self, ui: &mut Ui) {
@@ -1018,8 +1133,16 @@ impl App {
         let dirty = self.dirty();
         let active = self.status().and_then(|s| s.active.clone()).or_else(profile::active);
         let in_use = active.as_deref() == Some(name.as_str());
+        let built_in = self.built_in.contains(&name);
         ui.horizontal(|ui| {
-            if button(ui, "SAVE", Look::Primary, dirty).clicked() {
+            if built_in {
+                if button(ui, "SAVE AS NEW", Look::Primary, dirty)
+                    .on_hover_text("Built-in presets stay as they are; name your version in the left column")
+                    .clicked()
+                {
+                    self.new_name = Some(String::new());
+                }
+            } else if button(ui, "SAVE", Look::Primary, dirty).clicked() {
                 self.save();
             }
             if button(ui, "REVERT", Look::Quiet, dirty).clicked() {
@@ -1029,10 +1152,9 @@ impl App {
         });
         ui.horizontal(|ui| {
             if in_use && !dirty {
-                let (r, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
-                fill(ui.painter(), r, TEXT2);
-                label(ui, "IN USE", LABEL_PX, TEXT2);
-                ui.add_space(10.0);
+                current_mark(ui, "IN USE");
+            } else if built_in && dirty {
+                // a changed preset is used once it is saved under its own name
             } else if button(ui, if dirty { "SAVE AND USE" } else { "USE THIS PROFILE" }, Look::Outline, true)
                 .on_hover_text("loginux keeps the profile in use applied whenever its engine runs")
                 .clicked()
@@ -1040,7 +1162,7 @@ impl App {
             {
                 self.link.send(Request::Use { profile: Some(name.clone()) });
             }
-            if button(ui, "DELETE", Look::Quiet, true).clicked() {
+            if !built_in && button(ui, "DELETE", Look::Quiet, true).clicked() {
                 self.confirm = Some(Confirm::Delete(name.clone()));
             }
         });
@@ -1149,10 +1271,7 @@ impl App {
                     let current = controls.report_rate == Some(*hz);
                     let text = format!("{hz} HZ");
                     if current {
-                        let (sq, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
-                        fill(ui.painter(), sq, TEXT2);
-                        label(ui, &text, LABEL_PX, TEXT2);
-                        ui.add_space(8.0);
+                        current_mark(ui, &text);
                     } else if button(ui, &text, Look::Quiet, !busy).clicked() {
                         self.rate_confirm = Some(*hz);
                     }
@@ -1244,6 +1363,15 @@ impl App {
         ui.add_space(18.0);
         if self.open.is_none() {
             body(ui, "Create a profile in the left column to start painting.", TEXT2, 14.0);
+            return;
+        }
+        self.lighting_row(ui);
+        ui.add_space(12.0);
+        if self.work.effect.is_some() {
+            self.board(ui, true);
+            ui.add_space(12.0);
+            let back = colours_label(self.model);
+            body(ui, format!("The device runs this effect on its own, so the board's colours are not shown. {back} brings them back."), TEXT2, 13.0);
             return;
         }
         let clicked = self.board(ui, false);
@@ -1694,8 +1822,44 @@ fn selection_names(model: &Model, sel: &BTreeSet<u8>) -> String {
     }
 }
 
-/// Every key and strip colour in proportion, as the profile's thumbnail.
+/// The current choice in a row of options: a small square and its label.
+fn current_mark(ui: &mut Ui, text: &str) {
+    let (sq, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+    fill(ui.painter(), sq, TEXT2);
+    label(ui, text, LABEL_PX, TEXT2);
+    ui.add_space(8.0);
+}
+
+/// What the colour mode is called on this device.
+fn colours_label(model: &Model) -> &'static str {
+    if model.per_key { "PER-KEY" } else { "COLOURS" }
+}
+
+fn effect_note(kind: fx::Kind) -> &'static str {
+    match kind {
+        fx::Kind::Static => "Every light shows one colour.",
+        fx::Kind::Breathe => "Every light fades in and out in one colour.",
+        fx::Kind::Cycle => "Every light moves through the colour wheel together.",
+        fx::Kind::Wave => "A rainbow travels across the keys.",
+        fx::Kind::Ripple => "Each key press sends a ring of colour outwards.",
+    }
+}
+
+/// Every key and strip colour in proportion, as the profile's thumbnail; an
+/// effect shows its colour, or the colour wheel when it has none.
 fn strip(p: &Painter, r: Rect, model: &Model, prof: &Profile) {
+    if let Some(e) = &prof.effect {
+        if e.kind.coloured() {
+            fill(p, r, rgb(e.color));
+        } else {
+            let n = 24;
+            for i in 0..n {
+                let x = |i: usize| r.min.x + r.width() * i as f32 / n as f32;
+                fill(p, Rect::from_min_max(pos2(x(i), r.min.y), pos2(x(i + 1), r.max.y)), rgb(from_hsv([i as f32 / n as f32, 1.0, 1.0])));
+            }
+        }
+        return;
+    }
     let counts = colour_counts(model, prof, &[Kind::Key, Kind::Strip, Kind::Unknown]);
     let total: usize = counts.iter().map(|c| c.1).sum::<usize>().max(1);
     let mut x = r.min.x;
