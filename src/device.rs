@@ -19,6 +19,9 @@ const ROOT: u16 = 0x0000;
 const RGB_EFFECTS: u16 = 0x8071;
 const PER_KEY: u16 = 0x8081;
 const LAYOUT: u16 = 0x4540;
+const FEATURE_SET: u16 = 0x0001;
+const COLOR_LED_EFFECTS: u16 = 0x8070;
+const ONBOARD_PROFILES: u16 = 0x8100;
 const BRIGHTNESS: u16 = 0x8040;
 const REPORT_RATE: u16 = 0x8061;
 const GAME_MODE: u16 = 0x4523;
@@ -39,7 +42,34 @@ const ALLOWED: &[(u16, u8)] = &[
     (REPORT_RATE, 2), // getReportRate
     (REPORT_RATE, 3), // setReportRate: explicit user request only, never retried
     (GAME_MODE, 0),   // getGameMode
+    // `loginux probe` only, all getters:
+    (FEATURE_SET, 0),       // getCount
+    (FEATURE_SET, 1),       // getFeatureID
+    (COLOR_LED_EFFECTS, 0), // getInfo
+    (COLOR_LED_EFFECTS, 1), // getZoneInfo
+    (COLOR_LED_EFFECTS, 2), // getZoneEffectInfo
+    (ONBOARD_PROFILES, 0),  // getInfo
+    (ONBOARD_PROFILES, 2),  // getOnboardMode
 ];
+
+/// Names of common HID++ 2.0 features, after Solaar's table; for `loginux probe`.
+const FEATURE_NAMES: &[(u16, &str)] = &[
+    (0x0000, "IRoot"), (0x0001, "IFeatureSet"), (0x0002, "IFeatureInfo"), (0x0003, "DeviceFwVersion"),
+    (0x0005, "DeviceNameType"), (0x0007, "DeviceFriendlyName"), (0x0020, "ConfigChange"), (0x0021, "UniqueRandomId"),
+    (0x00c2, "DfuControlSigned"), (0x00c3, "DfuControl"), (0x00d0, "Dfu"), (0x1000, "BatteryStatus"),
+    (0x1001, "BatteryVoltage"), (0x1004, "UnifiedBattery"), (0x1300, "LedControl"), (0x1802, "DeviceReset"),
+    (0x1805, "OobState"), (0x1806, "ConfigDeviceProps"), (0x1814, "ChangeHost"), (0x1815, "HostsInfo"),
+    (0x1981, "Backlight"), (0x1b04, "ReprogControlsV4"), (0x1d4b, "WirelessDeviceStatus"), (0x2100, "VerticalScrolling"),
+    (0x2120, "HiResScroll"), (0x2121, "HiResWheel"), (0x2201, "AdjustableDpi"), (0x2202, "ExtendedAdjustableDpi"),
+    (0x4523, "GameMode"), (0x4540, "KeyboardLayout"), (0x8010, "GKey"), (0x8020, "MKeys"), (0x8030, "MacroRecord"),
+    (0x8040, "BrightnessControl"), (0x8060, "AdjustableReportRate"), (0x8061, "ExtendedAdjustableReportRate"),
+    (0x8070, "ColorLedEffects"), (0x8071, "RgbEffects"), (0x8080, "PerKeyLighting"), (0x8081, "PerKeyLightingV2"),
+    (0x8090, "ModeStatus"), (0x8100, "OnboardProfiles"), (0x8110, "MouseButtonSpy"), (0x8111, "LatencyMonitoring"),
+];
+
+pub fn feature_name(id: u16) -> &'static str {
+    FEATURE_NAMES.iter().find(|(f, _)| *f == id).map_or("", |(_, n)| n)
+}
 
 /// 0x8061 rate index to rate: bit `i` of the supported bitmap is index `i`.
 pub const RATES_HZ: [u32; 7] = [125, 250, 500, 1000, 2000, 4000, 8000];
@@ -82,6 +112,10 @@ pub struct Probe {
     pub per_key: bool,
     pub layout: Option<u8>,
     pub zones: Vec<u8>,
+    /// (index, feature ID, type flags, version) from IFeatureSet.
+    pub features: Vec<(u8, u16, u8, u8)>,
+    /// Lighting getters, as labelled raw replies for research notes.
+    pub lighting: Vec<String>,
 }
 
 pub fn probe(path: &Path) -> Result<Probe, Error> {
@@ -93,6 +127,46 @@ pub fn probe(path: &Path) -> Result<Probe, Error> {
     let rgb = kb.feature(RGB_EFFECTS)?;
     let per_key = kb.feature(PER_KEY)?;
     let layout = kb.layout_code()?;
+    let mut features = vec![];
+    if let Some(set) = kb.feature(FEATURE_SET)? {
+        let count = kb.call(FEATURE_SET, set, 0, &[])?[0];
+        for i in 1..=count {
+            let r = kb.call(FEATURE_SET, set, 1, &[i])?;
+            features.push((i, u16::from_be_bytes([r[0], r[1]]), r[2], r[3]));
+        }
+    }
+    let hex = |r: &[u8]| r.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
+    let mut lighting = vec![];
+    if let Some(index) = rgb {
+        // 0x8071 getInfo: clusters, then each cluster's effects (ID, capabilities, period).
+        let info = kb.call(RGB_EFFECTS, index, 0, &[0xFF, 0xFF, 0])?;
+        lighting.push(format!("0x8071 info: {}", hex(&info[..8])));
+        for cluster in 0..info[2] {
+            let c = kb.call(RGB_EFFECTS, index, 0, &[cluster, 0xFF, 0])?;
+            lighting.push(format!("0x8071 cluster {cluster}: {}", hex(&c[..8])));
+            for e in 0..c[4] {
+                let r = kb.call(RGB_EFFECTS, index, 0, &[cluster, e, 0])?;
+                lighting.push(format!("0x8071 cluster {cluster} effect {e}: {}", hex(&r[..10])));
+            }
+        }
+    }
+    if let Some(index) = kb.feature(COLOR_LED_EFFECTS)? {
+        // 0x8070: getInfo, getZoneInfo(zone), getZoneEffectInfo(zone, effect).
+        let info = kb.call(COLOR_LED_EFFECTS, index, 0, &[])?;
+        lighting.push(format!("0x8070 info: {}", hex(&info[..8])));
+        for zone in 0..info[0] {
+            let z = kb.call(COLOR_LED_EFFECTS, index, 1, &[zone, 0xFF, 0])?;
+            lighting.push(format!("0x8070 zone {zone}: {}", hex(&z[..8])));
+            for e in 0..z[3] {
+                let r = kb.call(COLOR_LED_EFFECTS, index, 2, &[zone, e, 0])?;
+                lighting.push(format!("0x8070 zone {zone} effect {e}: {}", hex(&r[..10])));
+            }
+        }
+    }
+    if let Some(index) = kb.feature(ONBOARD_PROFILES)? {
+        lighting.push(format!("0x8100 info: {}", hex(&kb.call(ONBOARD_PROFILES, index, 0, &[])?[..16])));
+        lighting.push(format!("0x8100 onboard mode: {}", hex(&kb.call(ONBOARD_PROFILES, index, 2, &[])?[..4])));
+    }
     let zones = match per_key {
         Some(index) => {
             kb.per_key = index;
@@ -100,7 +174,19 @@ pub fn probe(path: &Path) -> Result<Probe, Error> {
         }
         None => vec![],
     };
-    Ok(Probe { vendor, product, interface, hid_name, protocol, rgb_effects: rgb.is_some(), per_key: per_key.is_some(), layout, zones })
+    Ok(Probe {
+        vendor,
+        product,
+        interface,
+        hid_name,
+        protocol,
+        rgb_effects: rgb.is_some(),
+        per_key: per_key.is_some(),
+        layout,
+        zones,
+        features,
+        lighting,
+    })
 }
 
 impl Keyboard {

@@ -357,7 +357,11 @@ fn release(device: Option<PathBuf>) -> Result<(), String> {
 /// Read-only look at any hidraw node, printed as a starting keyboard definition.
 fn probe(device: Option<PathBuf>) -> Result<(), String> {
     let Some(path) = device else { return Err("usage: loginux probe --device /dev/hidrawN".into()) };
-    let Some(_lock) = engine::lock(false)? else { return Err(engine_busy()) };
+    // A device Loginux already drives belongs to the engine; anything else has no owner to wait for.
+    let _lock = match hidpp::identify(&path, layout::models()) {
+        Ok(_) => Some(engine::lock(false)?.ok_or_else(engine_busy)?),
+        Err(_) => None,
+    };
     let p = device::probe(&path).map_err(|e| e.to_string())?;
     eprintln!(
         "{}: USB {:04x}:{:04x} interface {}, HID++ {}.{}, 0x8071 {}, 0x8081 {}, {} zones, layout code {}",
@@ -372,8 +376,16 @@ fn probe(device: Option<PathBuf>) -> Result<(), String> {
         p.zones.len(),
         p.layout.map_or("not reported".into(), |c| format!("{c:#04x}"))
     );
+    eprintln!("features (index, ID, name, type flags, version):");
+    for (i, id, kind, version) in &p.features {
+        eprintln!("  {i:>2}  {id:#06x}  {:<28} {kind:#04x}  v{version}", device::feature_name(*id));
+    }
+    for line in &p.lighting {
+        eprintln!("{line}");
+    }
     if !(p.rgb_effects && p.per_key) {
-        return Err("this device lacks 0x8071 RGB effects or 0x8081 per-key lighting, which loginux needs".into());
+        eprintln!("no starting definition: Loginux drives devices with 0x8071 RGB effects and 0x8081 per-key lighting");
+        return Ok(());
     }
     // 0x8081 zones follow HID keyboard usages minus 3 (modifiers 104-111) on the
     // keyboards seen so far; these names are guesses for a channel check to confirm.
