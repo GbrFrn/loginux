@@ -11,8 +11,8 @@ protocol backend; see the last section.
 1. **Give your user access to the keyboard's HID++ interface.** Find its
    hidraw node with `udevadm info /dev/hidrawN`: look for your keyboard's
    `ID_VENDOR_ID` and `ID_MODEL_ID`, and note `ID_USB_INTERFACE_NUM`. Add a
-   line for it to `udev/70-loginux.rules` and install the rule as the
-   README describes. Tag only the HID++ interface; the interfaces that carry
+   line for it to `udev/70-loginux.rules` and install the rule as
+   [docs/usage.md](docs/usage.md#install-from-source) describes. Tag only the HID++ interface; the interfaces that carry
    keystrokes must stay root-only.
 
 2. **Probe it.** This sends only read requests and prints a starting
