@@ -20,7 +20,8 @@ returning when the service stopped. A channel check of all 133 zones found
 every key and bar segment where the definition puts it; the 8 unknown zones
 lit nothing. On CachyOS with Plasma 6.8 the package installed cleanly, the
 service's tray icon named the keyboard and its profile, and a left click on it
-opened the editor. Not yet observed: re-enumeration after a report-rate change,
+opened the editor. Picked from the tray, the Wave and Breathing presets played
+on the keyboard. Not yet observed: re-enumeration after a report-rate change,
 and whether the keyboard keeps a rate across a replug.
 [`research/`](research/README.md) records the evidence and its labels.
 
