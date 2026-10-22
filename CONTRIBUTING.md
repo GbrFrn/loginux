@@ -1,0 +1,112 @@
+# Contributing
+
+## Adding a keyboard
+
+Loginux drives Logitech keyboards that speak HID++ 2.0 and report two features:
+`0x8071` (RGB effects) and `0x8081` (per-key lighting). Such a keyboard needs
+no code, only a definition file. Other keyboards need a protocol backend; see
+the last section.
+
+1. **Give your user access to the keyboard's HID++ interface.** Find its
+   hidraw node with `udevadm info /dev/hidrawN`: look for your keyboard's
+   `ID_VENDOR_ID` and `ID_MODEL_ID`, and note `ID_USB_INTERFACE_NUM`. Add a
+   line for it to `udev/70-loginux-hidpp.rules` and install the rule as the
+   README describes. Tag only the HID++ interface; the interfaces that carry
+   keystrokes must stay root-only.
+
+2. **Probe it.** This sends only read requests and prints a starting
+   definition:
+
+   ```sh
+   loginux probe --device /dev/hidrawN > ~/.config/loginux/keyboards/my-keyboard.toml
+   ```
+
+   The file name, without `.toml`, becomes the definition's ID. The key names
+   are guesses: on the keyboards seen so far, a `0x8081` zone is the HID
+   keyboard usage minus 3, and the modifiers are 104 to 111. The positions are
+   a placeholder grid.
+
+3. **Check every zone on the keyboard.** Run `loginux`, open CHANNEL CHECK and
+   check all keys and the unknown zones. Loginux lights one zone at a time;
+   click the key that lit, or answer NOTHING LIT or NOT ON THE MAP. Then fix
+   the file: rename keys that lit somewhere else, move zones that lit a
+   strip or a logo, and leave zones that lit nothing in `unknown`.
+
+4. **Lay it out.** Set `at` and `size` so the board looks like the keyboard,
+   using key units (1 = one key pitch, quarter steps are usual). Restart
+   `loginux` to see each change.
+
+5. **Send it.** Copy the file into `keyboards/`, add a line for it to
+   `BUILT_IN` in `src/layout.rs`, add your udev line, and open a pull request.
+   Say what you observed on the keyboard and what you took from elsewhere,
+   such as vendor software.
+
+## Definition format
+
+```toml
+name = "Logitech G316 X 98"     # shown in the editor and in logs
+protocol = "hidpp20"            # the only protocol so far
+vendor = 0x046d                 # USB vendor ID
+product = 0xc36b                # USB product ID
+interface = 2                   # USB interface that carries HID++
+device_index = 0xff             # optional; 0xff = a keyboard on its own cable
+board = [19.5, 6.625]           # board width and height in key units
+
+# Zones the keyboard reports that light nothing known. They are lit only when a
+# profile names them under [zones].
+unknown = [0, 47, 99]
+
+# One entry per key. `name` is the profile name (lowercase letters, digits and
+# _; use Linux KEY_* names where they exist). `label` defaults to the name in
+# capitals and is drawn on the key; the bitmap font covers ASCII and the four
+# arrows. `short` is drawn instead when the label does not fit the key at the
+# current display scale; without one the key shows no legend. Never make a
+# short legend that reads as another key. `size` defaults to [1, 1].
+keys = [
+  { name = "esc", zone = 38, at = [0, 0] },
+  { name = "f10", zone = 64, short = "10", at = [10.75, 0] },
+  { name = "backspace", zone = 39, label = "BKSP", at = [13, 1.375], size = [2, 1] },
+]
+
+# Optional light strips. The zones are split into equal segments across `rect`
+# (x, y, width, height), in the order listed, and are named bar1, bar2, ...
+# A profile sets them in a [bar] table with its own base colour.
+[[strip]]
+name = "bar"
+title = "Light bar"
+rect = [0, 1.12, 19.5, 0.14]
+zones = [160, 161, 162]
+```
+
+Every zone ID may appear only once, and 255 is not allowed (it means "skip"
+on the wire). A definition with an unknown field is rejected, so a typo does
+not get silently ignored.
+
+## Adding a protocol
+
+Everything protocol-specific sits in three places:
+
+- `src/hidpp.rs`: finding and opening the device, and the HID++ request and
+  reply matching.
+- `src/device.rs`: the typed feature calls and `ALLOWED`, the list of every
+  request Loginux may send.
+- `take`, `paint` and `give_back` in `src/engine.rs`: claiming the lighting
+  from the firmware, painting a frame, and handing the lighting back.
+
+A second protocol needs those three operations plus "which zones does the
+device accept". When it arrives, put a trait over them; with one backend there
+was nothing to abstract yet. Keep the rules the HID++ backend follows:
+
+- Write colours to RAM only. Never send anything that saves to flash, updates
+  firmware, resets the device or unlocks engineering features.
+- Record what the device reported before taking control, and restore it on
+  every exit path.
+- Never take the lighting from another program without an explicit request.
+
+## Evidence
+
+Say what you observed on a keyboard and what you read in software, firmware
+or documentation, and keep the two apart. Layout positions from vendor
+software are layout data, not proof of which LED lights. Device findings go
+in `research/`, with the labels described in
+[research/README.md](research/README.md).

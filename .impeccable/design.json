@@ -1,0 +1,451 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-22T18:46:00+00:00",
+  "title": "Design System: loginux",
+  "extensions": {
+    "colorMeta": {
+      "ground": {
+        "role": "neutral",
+        "displayName": "Ground",
+        "canonical": "#0B0B0C",
+        "tonalRamp": [
+          "oklch(15% 0.002 286.1)",
+          "oklch(26% 0.002 286.1)",
+          "oklch(38% 0.002 286.1)",
+          "oklch(49% 0.002 286.1)",
+          "oklch(61% 0.002 286.1)",
+          "oklch(72% 0.002 286.1)",
+          "oklch(84% 0.002 286.1)",
+          "oklch(95% 0.002 286.1)"
+        ]
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Panel",
+        "canonical": "#151517",
+        "tonalRamp": [
+          "oklch(15% 0.004 286.0)",
+          "oklch(26% 0.004 286.0)",
+          "oklch(38% 0.004 286.0)",
+          "oklch(49% 0.004 286.0)",
+          "oklch(61% 0.004 286.0)",
+          "oklch(72% 0.004 286.0)",
+          "oklch(84% 0.004 286.0)",
+          "oklch(95% 0.004 286.0)"
+        ]
+      },
+      "raised": {
+        "role": "neutral",
+        "displayName": "Raised",
+        "canonical": "#1F1F23",
+        "tonalRamp": [
+          "oklch(15% 0.008 285.8)",
+          "oklch(26% 0.008 285.8)",
+          "oklch(38% 0.008 285.8)",
+          "oklch(49% 0.008 285.8)",
+          "oklch(61% 0.008 285.8)",
+          "oklch(72% 0.008 285.8)",
+          "oklch(84% 0.008 285.8)",
+          "oklch(95% 0.008 285.8)"
+        ]
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Rule",
+        "canonical": "#2A2A2E",
+        "tonalRamp": [
+          "oklch(15% 0.007 285.9)",
+          "oklch(26% 0.007 285.9)",
+          "oklch(38% 0.007 285.9)",
+          "oklch(49% 0.007 285.9)",
+          "oklch(61% 0.007 285.9)",
+          "oklch(72% 0.007 285.9)",
+          "oklch(84% 0.007 285.9)",
+          "oklch(95% 0.007 285.9)"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Text",
+        "canonical": "#EDEDED",
+        "tonalRamp": [
+          "oklch(15% 0.000 89.9)",
+          "oklch(26% 0.000 89.9)",
+          "oklch(38% 0.000 89.9)",
+          "oklch(49% 0.000 89.9)",
+          "oklch(61% 0.000 89.9)",
+          "oklch(72% 0.000 89.9)",
+          "oklch(84% 0.000 89.9)",
+          "oklch(95% 0.000 89.9)"
+        ]
+      },
+      "text-secondary": {
+        "role": "neutral",
+        "displayName": "Secondary Text",
+        "canonical": "#A9A9AE",
+        "tonalRamp": [
+          "oklch(15% 0.007 286.2)",
+          "oklch(26% 0.007 286.2)",
+          "oklch(38% 0.007 286.2)",
+          "oklch(49% 0.007 286.2)",
+          "oklch(61% 0.007 286.2)",
+          "oklch(72% 0.007 286.2)",
+          "oklch(84% 0.007 286.2)",
+          "oklch(95% 0.007 286.2)"
+        ]
+      },
+      "label": {
+        "role": "neutral",
+        "displayName": "Label Grey",
+        "canonical": "#8E8E94",
+        "tonalRamp": [
+          "oklch(15% 0.009 286.2)",
+          "oklch(26% 0.009 286.2)",
+          "oklch(38% 0.009 286.2)",
+          "oklch(49% 0.009 286.2)",
+          "oklch(61% 0.009 286.2)",
+          "oklch(72% 0.009 286.2)",
+          "oklch(84% 0.009 286.2)",
+          "oklch(95% 0.009 286.2)"
+        ]
+      },
+      "disabled": {
+        "role": "neutral",
+        "displayName": "Disabled",
+        "canonical": "#4A4A50",
+        "tonalRamp": [
+          "oklch(15% 0.010 286.0)",
+          "oklch(26% 0.010 286.0)",
+          "oklch(38% 0.010 286.0)",
+          "oklch(49% 0.010 286.0)",
+          "oklch(61% 0.010 286.0)",
+          "oklch(72% 0.010 286.0)",
+          "oklch(84% 0.010 286.0)",
+          "oklch(95% 0.010 286.0)"
+        ]
+      },
+      "dots": {
+        "role": "neutral",
+        "displayName": "Dot Grey",
+        "canonical": "#6E6E73",
+        "tonalRamp": [
+          "oklch(15% 0.008 286.1)",
+          "oklch(26% 0.008 286.1)",
+          "oklch(38% 0.008 286.1)",
+          "oklch(49% 0.008 286.1)",
+          "oklch(61% 0.008 286.1)",
+          "oklch(72% 0.008 286.1)",
+          "oklch(84% 0.008 286.1)",
+          "oklch(95% 0.008 286.1)"
+        ]
+      },
+      "board-body": {
+        "role": "neutral",
+        "displayName": "Board Black",
+        "canonical": "#000000",
+        "tonalRamp": [
+          "oklch(15% 0.000 0.0)",
+          "oklch(26% 0.000 0.0)",
+          "oklch(38% 0.000 0.0)",
+          "oklch(49% 0.000 0.0)",
+          "oklch(61% 0.000 0.0)",
+          "oklch(72% 0.000 0.0)",
+          "oklch(84% 0.000 0.0)",
+          "oklch(95% 0.000 0.0)"
+        ]
+      },
+      "dark-key": {
+        "role": "neutral",
+        "displayName": "Dark Key",
+        "canonical": "#1A1A1D",
+        "tonalRamp": [
+          "oklch(15% 0.006 285.9)",
+          "oklch(26% 0.006 285.9)",
+          "oklch(38% 0.006 285.9)",
+          "oklch(49% 0.006 285.9)",
+          "oklch(61% 0.006 285.9)",
+          "oklch(72% 0.006 285.9)",
+          "oklch(84% 0.006 285.9)",
+          "oklch(95% 0.006 285.9)"
+        ]
+      },
+      "signal-red": {
+        "role": "primary",
+        "displayName": "Signal Red",
+        "canonical": "#FF2E3F",
+        "tonalRamp": [
+          "oklch(15% 0.239 23.8)",
+          "oklch(26% 0.239 23.8)",
+          "oklch(38% 0.239 23.8)",
+          "oklch(49% 0.239 23.8)",
+          "oklch(61% 0.239 23.8)",
+          "oklch(72% 0.239 23.8)",
+          "oklch(84% 0.239 23.8)",
+          "oklch(95% 0.239 23.8)"
+        ]
+      },
+      "signal-red-hot": {
+        "role": "primary",
+        "displayName": "Signal Red, Hot",
+        "canonical": "#FF5765",
+        "tonalRamp": [
+          "oklch(15% 0.203 19.6)",
+          "oklch(26% 0.203 19.6)",
+          "oklch(38% 0.203 19.6)",
+          "oklch(49% 0.203 19.6)",
+          "oklch(61% 0.203 19.6)",
+          "oklch(72% 0.203 19.6)",
+          "oklch(84% 0.203 19.6)",
+          "oklch(95% 0.203 19.6)"
+        ]
+      },
+      "observed-green": {
+        "role": "secondary",
+        "displayName": "Observed Green",
+        "canonical": "#3FD07A",
+        "tonalRamp": [
+          "oklch(15% 0.173 152.9)",
+          "oklch(26% 0.173 152.9)",
+          "oklch(38% 0.173 152.9)",
+          "oklch(49% 0.173 152.9)",
+          "oklch(61% 0.173 152.9)",
+          "oklch(72% 0.173 152.9)",
+          "oklch(84% 0.173 152.9)",
+          "oklch(95% 0.173 152.9)"
+        ]
+      },
+      "caution-amber": {
+        "role": "tertiary",
+        "displayName": "Caution Amber",
+        "canonical": "#F2B84B",
+        "tonalRamp": [
+          "oklch(15% 0.140 80.1)",
+          "oklch(26% 0.140 80.1)",
+          "oklch(38% 0.140 80.1)",
+          "oklch(49% 0.140 80.1)",
+          "oklch(61% 0.140 80.1)",
+          "oklch(72% 0.140 80.1)",
+          "oklch(84% 0.140 80.1)",
+          "oklch(95% 0.140 80.1)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "title": {
+        "displayName": "Title",
+        "purpose": "Open profile name and CHANNEL CHECK heading."
+      },
+      "brand": {
+        "displayName": "Brand",
+        "purpose": "G316 wordmark in the header."
+      },
+      "hex": {
+        "displayName": "Hex",
+        "purpose": "Selection hex, NONE or MIXED; zone number during a check."
+      },
+      "tab": {
+        "displayName": "Tab",
+        "purpose": "Header tabs."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Button labels and control-group labels."
+      },
+      "small": {
+        "displayName": "Small",
+        "purpose": "Profile names, status words, meta and proof lines, research-zone numbers."
+      },
+      "legend": {
+        "displayName": "Legend",
+        "purpose": "Key legends, inset 4pt."
+      },
+      "heading": {
+        "displayName": "Heading",
+        "purpose": "egui heading style."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Instructions and empty-state prose."
+      },
+      "body-small": {
+        "displayName": "Body Small",
+        "purpose": "Status detail, hints, colour list."
+      }
+    },
+    "pixelGrid": {
+      "cellRounding": "whole(points * pixels_per_point + 0.01), minimum 1 device px",
+      "feathering": false,
+      "bitmapCellsPt": [
+        1,
+        1.5,
+        2,
+        4,
+        6
+      ],
+      "capRows": 5,
+      "glyphRows": 7,
+      "ruleWidthPt": 2,
+      "hairlinePt": 1,
+      "dotPatch": {
+        "dotPt": 2,
+        "pitchPt": 6
+      }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [
+      {
+        "name": "window-min",
+        "value": "1120x700pt"
+      },
+      {
+        "name": "window-default",
+        "value": "1360x840pt"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one primary action in view: SAVE, RUN AT LOGIN, TAKE OVER.",
+      "html": "<button class=\"ds-btn-primary\">SAVE</button>",
+      "css": ".ds-btn-primary { font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-weight: 700; font-size: 10px; padding: 9px 12px; border-radius: 0; cursor: pointer; } .ds-btn-primary { background: #FF2E3F; color: #0B0B0C; border: none; } .ds-btn-primary:hover { background: #FF5765; } .ds-btn-primary:active { background: #FF2E3F; } .ds-btn-primary:focus-visible { outline: 2px solid #FF2E3F; outline-offset: 3px; } .ds-btn-primary:disabled { background: transparent; color: #4A4A50; cursor: default; }"
+    },
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Committing actions: RELEASE LIGHTING, USE THIS PROFILE, CREATE, CHECK.",
+      "html": "<button class=\"ds-btn-outline\">RELEASE LIGHTING</button>",
+      "css": ".ds-btn-outline { font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-weight: 700; font-size: 10px; padding: 9px 12px; border-radius: 0; cursor: pointer; } .ds-btn-outline { background: transparent; color: #EDEDED; border: 2px solid #EDEDED; } .ds-btn-outline:hover { background: #1F1F23; } .ds-btn-outline:active { background: #2A2A2E; } .ds-btn-outline:focus-visible { outline: 2px solid #FF2E3F; outline-offset: 3px; }"
+    },
+    {
+      "name": "Quiet Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "Secondary and reversible actions: REVERT, DELETE, SKIP, selection presets.",
+      "html": "<button class=\"ds-btn-quiet\">ALL KEYS</button>",
+      "css": ".ds-btn-quiet { font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-weight: 700; font-size: 10px; padding: 9px 12px; border-radius: 0; cursor: pointer; } .ds-btn-quiet { background: transparent; color: #A9A9AE; border: 2px solid #2A2A2E; } .ds-btn-quiet:hover { background: #1F1F23; color: #EDEDED; } .ds-btn-quiet:focus-visible { outline: 2px solid #FF2E3F; outline-offset: 3px; }"
+    },
+    {
+      "name": "Disabled Button",
+      "kind": "button",
+      "refersTo": "button-disabled",
+      "description": "Any disabled control: Disabled text, no edge, no fill.",
+      "html": "<button class=\"ds-btn-disabled\" disabled>REVERT</button>",
+      "css": ".ds-btn-disabled { font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-weight: 700; font-size: 10px; padding: 9px 12px; border-radius: 0; cursor: pointer; } .ds-btn-disabled { background: transparent; color: #4A4A50; border: 2px solid transparent; cursor: default; }"
+    },
+    {
+      "name": "Header Tabs",
+      "kind": "nav",
+      "refersTo": "tab",
+      "description": "EDIT and CHANNEL CHECK; red underline on the active tab, resting on the 2px header rule.",
+      "html": "<nav class=\"ds-tabs\"><a class=\"ds-tab ds-tab-on\" href=\"#\">EDIT</a><a class=\"ds-tab\" href=\"#\">CHANNEL CHECK</a></nav>",
+      "css": ".ds-tabs { display: flex; gap: 34px; height: 64px; align-items: center; background: #0B0B0C; border-bottom: 2px solid #EDEDED; padding: 0 22px; } .ds-tab { font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-size: 13px; color: #8E8E94; text-decoration: none; height: 100%; display: flex; align-items: center; position: relative; } .ds-tab:hover { color: #EDEDED; } .ds-tab-on { color: #EDEDED; } .ds-tab-on::after { content: ''; position: absolute; left: -2px; right: -2px; bottom: 0; height: 4px; background: #FF2E3F; } .ds-tab:focus-visible { outline: 2px solid #FF2E3F; outline-offset: -4px; }"
+    },
+    {
+      "name": "Profile Box",
+      "kind": "card",
+      "refersTo": "profile-box",
+      "description": "A 48pt ruled box per profile with a proportional colour strip; the open one has a Panel fill and Text edge.",
+      "html": "<div class=\"ds-profile ds-profile-open\" tabindex=\"0\"><span class=\"ds-profile-name\">EVENING</span><span class=\"ds-profile-mark\">IN USE</span><span class=\"ds-profile-strip\"></span></div>",
+      "css": ".ds-profile { position: relative; width: 204px; height: 48px; box-sizing: border-box; padding: 10px; border: 2px solid #2A2A2E; background: transparent; } .ds-profile:hover { background: #1F1F23; } .ds-profile-open { background: #151517; border-color: #EDEDED; } .ds-profile:focus-visible { outline: 2px solid #FF2E3F; outline-offset: 3px; } .ds-profile-name { font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-size: 10px; color: #EDEDED; } .ds-profile-mark { font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-size: 10px; color: #A9A9AE; position: absolute; right: 10px; bottom: 10px; } .ds-profile-strip { position: absolute; left: 10px; right: 70px; bottom: 10px; height: 5px; background: linear-gradient(90deg, #3A2A6E 0 60%, #5B6CFF 60% 80%, #E8459F 80% 90%, #38D07A 90%); }"
+    },
+    {
+      "name": "Value Field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "egui text field and drag value: Board Black, 2pt Rule edge, square, red cursor.",
+      "html": "<label class=\"ds-field-row\"><span class=\"ds-field-label\">HEX</span><input class=\"ds-field\" value=\"#38d07a\"></label>",
+      "css": ".ds-field-row { display: inline-flex; gap: 8px; align-items: center; } .ds-field-label { font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-weight: 700; font-size: 10px; color: #8E8E94; } .ds-field { font-family: Archivo, sans-serif; font-size: 14px; color: #EDEDED; background: #000000; border: 2px solid #2A2A2E; border-radius: 0; height: 26px; width: 96px; padding: 0 6px; caret-color: #FF2E3F; } .ds-field:hover { border-color: #A9A9AE; } .ds-field:focus-visible { outline: none; border-color: #EDEDED; } .ds-field::selection { background: rgba(255,46,63,0.45); }"
+    },
+    {
+      "name": "Board Keys",
+      "kind": "custom",
+      "refersTo": "key-unpainted",
+      "description": "Keys on the black board: Dark Key when unpainted, exact RGB when painted, red outline when selected, 3pt proof mark.",
+      "html": "<div class=\"ds-board\"><div class=\"ds-key\">ESC</div><div class=\"ds-key ds-key-lit\" style=\"background:#38D07A\">W<i class=\"ds-proof\"></i></div><div class=\"ds-key ds-key-lit ds-key-sel\" style=\"background:#5B6CFF\">F1</div></div>",
+      "css": ".ds-board { display: inline-flex; gap: 4px; padding: 10px; background: #000000; outline: 2px solid #2A2A2E; outline-offset: 8px; } .ds-key { position: relative; width: 38px; height: 38px; background: #1A1A1D; color: #A9A9AE; font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-size: 7px; padding: 4px; box-sizing: border-box; border-radius: 0; } .ds-key:hover { box-shadow: inset 0 0 0 1px #EDEDED; } .ds-key-lit { color: #0B0B0C; } .ds-key-sel { outline: 2px solid #FF2E3F; } .ds-proof { position: absolute; right: 3px; bottom: 3px; width: 3px; height: 3px; background: #3FD07A; }"
+    },
+    {
+      "name": "Selection Specimen",
+      "kind": "custom",
+      "refersTo": "",
+      "description": "The selection as a specimen: label, hex in bitmap caps, flat swatch at three sizes.",
+      "html": "<div class=\"ds-spec\"><div class=\"ds-spec-label\">SELECTION: W A S D</div><div class=\"ds-spec-hex\">#38D07A</div><div class=\"ds-sw\" style=\"width:100%;height:72px\"></div><div class=\"ds-sw\" style=\"width:50%;height:34px\"></div><div class=\"ds-sw\" style=\"width:20%;height:14px\"></div></div>",
+      "css": ".ds-spec { width: 284px; padding: 16px; background: #151517; display: flex; flex-direction: column; gap: 8px; } .ds-spec-label { font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-weight: 700; font-size: 10px; color: #8E8E94; } .ds-spec-hex { font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-weight: 700; font-size: 27px; color: #EDEDED; } .ds-sw { background: #38D07A; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Bitmap Specimen",
+    "overview": "The window is one keyboard set as a bitmap type specimen on black. Headings, tabs, labels, numbers and key legends all come from one pixel face, Silkscreen, pre-rasterized into cells and painted as flat rectangles. Every cell and every shape lands on whole device pixels, so the lettering echoes the keyboard's own dot screen and stays sharp at 100, 125, 150 and 200 percent display scale. Archivo carries only running prose and numeric readouts.\n\nThe density is that of a working instrument: three fixed columns under a 64pt header, ruled boxes, no ornament beyond the dot-matrix patch. Colour belongs to the keyboard. LED colours appear as flat fills of the exact RGB sent, while the chrome stays in near-black greys with three signal colours that each mean one thing. The interface is dark by commitment.\n\nRejected outright: the RGB-suite default of a charcoal window with a product render, a colour wheel and glow. Also rejected, by the user's standing rules: cream or off-white grounds, italic accent words, numbered section labels, monospace labels and pill buttons.",
+    "keyCharacteristics": [
+      "Bitmap caps for every heading, tab, label, number and key legend; Archivo for prose and readouts only.",
+      "Whole-device-pixel geometry everywhere, with antialiasing (feathering) off.",
+      "Square corners on every surface, control and key.",
+      "LED colours as flat exact-RGB fills, never glowed, shaded or gradiented.",
+      "Red, green and amber each reserved for one meaning.",
+      "The dot-matrix patch as the single house texture."
+    ],
+    "rules": [
+      {
+        "name": "The One Meaning Rule",
+        "body": "Red means selected, active, focused or primary; green means connected or observed; amber means warning or differing proof. No signal colour decorates, and no other hue enters the chrome.",
+        "section": "colors"
+      },
+      {
+        "name": "The Keyboard Owns Colour Rule",
+        "body": "Any hue outside the signals on screen is an LED colour the user chose, shown as a flat fill of its exact RGB. A user colour that happens to be red or green is still content, not a signal.",
+        "section": "colors"
+      },
+      {
+        "name": "The Quiet Disabled Rule",
+        "body": "A disabled control is Disabled-grey text with no edge and no fill, so it reads as absent rather than as a faint button.",
+        "section": "colors"
+      },
+      {
+        "name": "The Whole Cell Rule",
+        "body": "A bitmap cell is its point size times the display scale, rounded to whole device pixels with a +0.01 bias (so 1.4999 rounds like 1.5), and never smaller than one device pixel. Bitmap text is never scaled, smoothed or drawn as an outline font.",
+        "section": "typography"
+      },
+      {
+        "name": "The No Monospace Rule",
+        "body": "egui's monospace family is mapped to Archivo. Labels are bitmap caps or Archivo, never a monospace face.",
+        "section": "typography"
+      },
+      {
+        "name": "The Whole Legend Rule",
+        "body": "A key shows its full label if it fits in the key's width minus 8pt, else the definition's `short` legend, else nothing. Words are never cut.",
+        "section": "typography"
+      },
+      {
+        "name": "The Snapped Geometry Rule",
+        "body": "Every rectangle passes through `snap()` and every line width through `line()`: edges and widths land on whole device pixels, lines at least one pixel wide. Feathering is off globally, so a non-snapped shape shows as a visible jag. Keep it that way.",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat Light Rule",
+        "body": "An LED colour is a flat fill of the exact RGB, with no glow, bloom, gradient or shading. The picker's saturation and value field (24 x 24 cells) and hue strip (48 cells) are built from flat snapped cells, not smooth gradients.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do draw every bitmap word with `px_text` at one of the seven sizes (cells of 1, 1.5, 2, 4 or 6pt) and snap every shape with `snap()`, `line()`, `fill()` and `outline()`.",
+      "Do keep feathering off and keep the +0.01 rounding bias in `whole()`.",
+      "Do show LED colour as a flat fill of the exact RGB the keyboard receives.",
+      "Do reserve Signal Red for selection, the active tab, focus and the one primary action in view; Observed Green for connected and observed; Caution Amber for warnings and differing proof.",
+      "Do render disabled controls as Disabled-grey text with no edge.",
+      "Do keep proof states distinct: observed, differs, and unmarked layout data.",
+      "Do fall back from full label to `short` legend to no legend on keys."
+    ],
+    "donts": [
+      "Don't add glow, gradients, shadows or rounded corners to keys, swatches or controls.",
+      "Don't use red, green or amber for decoration or for a meaning other than its own.",
+      "Don't set bitmap text in mixed case, at a non-whole cell size, or through a vector font.",
+      "Don't use cream or off-white grounds, italic accent words, numbered section labels, monospace labels or pill buttons.",
+      "Don't add a product render, colour wheel or charcoal RGB-suite chrome."
+    ]
+  }
+}

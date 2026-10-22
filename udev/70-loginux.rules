@@ -1,0 +1,6 @@
+# Loginux: give the logged-in seat user each supported keyboard's HID++ interface, and
+# nothing else. One line per keyboard; the interfaces that carry key reports stay
+# root-only.
+
+# Logitech G316 X 98 (046d:c36b): HID++ on USB interface 2.
+SUBSYSTEM=="hidraw", IMPORT{builtin}="usb_id", ENV{ID_VENDOR_ID}=="046d", ENV{ID_MODEL_ID}=="c36b", ENV{ID_USB_INTERFACE_NUM}=="02", TAG+="uaccess"

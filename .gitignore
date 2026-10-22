@@ -1,0 +1,12 @@
+/target/
+
+# Local working checklist
+/TASKS.md
+
+# Raw USB captures contain keystrokes; quote the HID++ packets instead.
+*.pcapng
+
+# impeccable working files (decision sketches, review captures)
+/.impeccable/mocks/
+/.impeccable/review/
+/.impeccable/questions/

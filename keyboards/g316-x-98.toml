@@ -1,0 +1,125 @@
+# Logitech G316 X 98, ANSI 98-key layout. The format is described in CONTRIBUTING.md.
+#
+# Zone IDs are the keyboard's 0x8081 zones (HID keyboard usage minus 3,
+# modifiers 104-111), read live from the keyboard and checked against its
+# firmware. Positions are in key units (1 = one key pitch), measured from G
+# HUB's layout data and snapped to quarter units. Positions are layout data,
+# not proof of which LED lights: run a channel check to confirm them.
+
+name = "Logitech G316 X 98"
+protocol = "hidpp20"
+vendor = 0x046d
+product = 0xc36b
+interface = 2
+board = [19.5, 6.625]
+
+# Zones the keyboard accepts with no known key. loginux lights them only when a
+# profile names them under [zones].
+unknown = [0, 47, 99, 100, 101, 102, 103, 154]
+
+# `short` is drawn when the label does not fit the key at the current scale.
+keys = [
+  { name = "esc", zone = 38, at = [0, 0] },
+  { name = "f1", zone = 55, at = [1.25, 0] },
+  { name = "f2", zone = 56, at = [2.25, 0] },
+  { name = "f3", zone = 57, at = [3.25, 0] },
+  { name = "f4", zone = 58, at = [4.25, 0] },
+  { name = "f5", zone = 59, at = [5.5, 0] },
+  { name = "f6", zone = 60, at = [6.5, 0] },
+  { name = "f7", zone = 61, at = [7.5, 0] },
+  { name = "f8", zone = 62, at = [8.5, 0] },
+  { name = "f9", zone = 63, at = [9.75, 0] },
+  { name = "f10", zone = 64, short = "10", at = [10.75, 0] },
+  { name = "f11", zone = 65, short = "11", at = [11.75, 0] },
+  { name = "f12", zone = 66, short = "12", at = [12.75, 0] },
+  { name = "delete", zone = 73, label = "DEL", at = [14, 0] },
+  { name = "grave", zone = 50, label = "`", at = [0, 1.375] },
+  { name = "1", zone = 27, at = [1, 1.375] },
+  { name = "2", zone = 28, at = [2, 1.375] },
+  { name = "3", zone = 29, at = [3, 1.375] },
+  { name = "4", zone = 30, at = [4, 1.375] },
+  { name = "5", zone = 31, at = [5, 1.375] },
+  { name = "6", zone = 32, at = [6, 1.375] },
+  { name = "7", zone = 33, at = [7, 1.375] },
+  { name = "8", zone = 34, at = [8, 1.375] },
+  { name = "9", zone = 35, at = [9, 1.375] },
+  { name = "0", zone = 36, at = [10, 1.375] },
+  { name = "minus", zone = 42, label = "-", at = [11, 1.375] },
+  { name = "equal", zone = 43, label = "=", at = [12, 1.375] },
+  { name = "backspace", zone = 39, label = "BKSP", at = [13, 1.375], size = [2, 1] },
+  { name = "numlock", zone = 80, label = "NUM", short = "NM", at = [15.5, 1.375] },
+  { name = "kpslash", zone = 81, label = "/", at = [16.5, 1.375] },
+  { name = "kpasterisk", zone = 82, label = "*", at = [17.5, 1.375] },
+  { name = "kpminus", zone = 83, label = "-", at = [18.5, 1.375] },
+  { name = "tab", zone = 40, at = [0, 2.375], size = [1.5, 1] },
+  { name = "q", zone = 17, at = [1.5, 2.375] },
+  { name = "w", zone = 23, at = [2.5, 2.375] },
+  { name = "e", zone = 5, at = [3.5, 2.375] },
+  { name = "r", zone = 18, at = [4.5, 2.375] },
+  { name = "t", zone = 20, at = [5.5, 2.375] },
+  { name = "y", zone = 25, at = [6.5, 2.375] },
+  { name = "u", zone = 21, at = [7.5, 2.375] },
+  { name = "i", zone = 9, at = [8.5, 2.375] },
+  { name = "o", zone = 15, at = [9.5, 2.375] },
+  { name = "p", zone = 16, at = [10.5, 2.375] },
+  { name = "leftbrace", zone = 44, label = "[", at = [11.5, 2.375] },
+  { name = "rightbrace", zone = 45, label = "]", at = [12.5, 2.375] },
+  { name = "backslash", zone = 46, label = "\\", at = [13.5, 2.375], size = [1.5, 1] },
+  { name = "kp7", zone = 92, label = "7", at = [15.5, 2.375] },
+  { name = "kp8", zone = 93, label = "8", at = [16.5, 2.375] },
+  { name = "kp9", zone = 94, label = "9", at = [17.5, 2.375] },
+  { name = "kpplus", zone = 84, label = "+", at = [18.5, 2.375], size = [1, 2] },
+  { name = "capslock", zone = 54, label = "CAPS", at = [0, 3.375], size = [1.75, 1] },
+  { name = "a", zone = 1, at = [1.75, 3.375] },
+  { name = "s", zone = 19, at = [2.75, 3.375] },
+  { name = "d", zone = 4, at = [3.75, 3.375] },
+  { name = "f", zone = 6, at = [4.75, 3.375] },
+  { name = "g", zone = 7, at = [5.75, 3.375] },
+  { name = "h", zone = 8, at = [6.75, 3.375] },
+  { name = "j", zone = 10, at = [7.75, 3.375] },
+  { name = "k", zone = 11, at = [8.75, 3.375] },
+  { name = "l", zone = 12, at = [9.75, 3.375] },
+  { name = "semicolon", zone = 48, label = ";", at = [10.75, 3.375] },
+  { name = "apostrophe", zone = 49, label = "'", at = [11.75, 3.375] },
+  { name = "enter", zone = 37, at = [12.75, 3.375], size = [2.25, 1] },
+  { name = "kp4", zone = 89, label = "4", at = [15.5, 3.375] },
+  { name = "kp5", zone = 90, label = "5", at = [16.5, 3.375] },
+  { name = "kp6", zone = 91, label = "6", at = [17.5, 3.375] },
+  { name = "leftshift", zone = 105, label = "SHIFT", at = [0, 4.375], size = [2.25, 1] },
+  { name = "z", zone = 26, at = [2.25, 4.375] },
+  { name = "x", zone = 24, at = [3.25, 4.375] },
+  { name = "c", zone = 3, at = [4.25, 4.375] },
+  { name = "v", zone = 22, at = [5.25, 4.375] },
+  { name = "b", zone = 2, at = [6.25, 4.375] },
+  { name = "n", zone = 14, at = [7.25, 4.375] },
+  { name = "m", zone = 13, at = [8.25, 4.375] },
+  { name = "comma", zone = 51, label = ",", at = [9.25, 4.375] },
+  { name = "dot", zone = 52, label = ".", at = [10.25, 4.375] },
+  { name = "slash", zone = 53, label = "/", at = [11.25, 4.375] },
+  { name = "rightshift", zone = 109, label = "SHIFT", at = [12.25, 4.375], size = [1.75, 1] },
+  { name = "up", zone = 79, label = "↑", at = [14.25, 4.625] },
+  { name = "kp1", zone = 86, label = "1", at = [15.5, 4.375] },
+  { name = "kp2", zone = 87, label = "2", at = [16.5, 4.375] },
+  { name = "kp3", zone = 88, label = "3", at = [17.5, 4.375] },
+  { name = "kpenter", zone = 85, label = "ENT", short = "EN", at = [18.5, 4.375], size = [1, 2] },
+  { name = "leftctrl", zone = 104, label = "CTRL", short = "CTL", at = [0, 5.375], size = [1.25, 1] },
+  { name = "leftmeta", zone = 107, label = "SUPER", short = "SUP", at = [1.25, 5.375], size = [1.25, 1] },
+  { name = "leftalt", zone = 106, label = "ALT", at = [2.5, 5.375], size = [1.25, 1] },
+  { name = "space", zone = 41, label = "", at = [3.75, 5.375], size = [6.25, 1] },
+  { name = "rightalt", zone = 110, label = "ALT", at = [10, 5.375] },
+  { name = "rightmeta", zone = 111, label = "SUPER", short = "SUP", at = [11, 5.375] },
+  { name = "rightctrl", zone = 108, label = "CTRL", short = "CTL", at = [12, 5.375] },
+  { name = "left", zone = 77, label = "←", at = [13.25, 5.625] },
+  { name = "down", zone = 78, label = "↓", at = [14.25, 5.625] },
+  { name = "right", zone = 76, label = "→", at = [15.25, 5.625] },
+  { name = "kp0", zone = 95, label = "0", at = [16.5, 5.375] },
+  { name = "kpdot", zone = 96, label = ".", at = [17.5, 5.375] },
+]
+
+# The light bar between the function row and the number row, split into equal
+# segments in this order. The order is G HUB's left to right and is unverified.
+[[strip]]
+name = "bar"
+title = "Light bar"
+rect = [0, 1.12, 19.5, 0.14]
+zones = [160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221]

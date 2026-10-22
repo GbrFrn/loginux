@@ -1,0 +1,12 @@
+[Unit]
+Description=Keep the Logitech G316 X 98 lighting profile applied
+Documentation=file://%h/loginux-re/README.md
+
+[Service]
+# `cargo install --path .` puts the binary here; packages should point at /usr/bin/loginux.
+ExecStart=%h/.cargo/bin/loginux run
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
