@@ -44,14 +44,15 @@ and the editor. Measured with v0.1.4 on an Intel Core i7-12700H laptop
 | Service, memory | 6 MB at its peak by systemd's count, under 3 MB of it its own |
 | Service start to lighting applied | 140 ms, finding the keyboard included |
 | `loginux status` | 1.1 ms (median of 50), starting the process included |
-| Dragging a colour over one key | 60 frames a second, 2 reports a frame, 1 to 2 % of one core |
-| Dragging a colour over all keys | 60 frames a second, 25 reports a frame, 1 to 4 % of one core |
+| Dragging a colour over one key | 60 frames a second, 2 reports a frame; the service 1 to 2 % of one core, the editor 15 to 24 % |
+| Dragging a colour over all keys | 60 frames a second, 25 reports a frame; the service 1 to 4 % of one core, the editor 20 to 27 % |
 | Editor, open and idle | 0.2 % of one core, 25 MB of memory of its own |
 | Editor, one frame | 0.25 to 0.6 ms of CPU |
 
 CPU and memory come from `/proc` and systemd's accounting, and the drags were
-measured on the keyboard. The frame times come from
-`cargo test --release frame_cost -- --ignored --nocapture`.
+measured on the keyboard. While you drag, most of the editor's share goes to
+redrawing the window at the display's rate, 240 Hz on this laptop. The frame
+times come from `cargo test --release frame_cost -- --ignored --nocapture`.
 
 ## Supported devices
 
