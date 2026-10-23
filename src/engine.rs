@@ -11,7 +11,7 @@
 
 use crate::device::{Event, Keyboard, RATES_HZ};
 use crate::effects::{self, Effect};
-use crate::hidpp::{self, Error};
+use crate::hidpp::Error;
 use crate::ipc::{self, Control, Controls, Device, RateChange, Reply, Request, Status};
 use crate::layout::{self, Kind, Model};
 use crate::profile::{self, Profile, Rgb};
@@ -22,7 +22,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread::{self, sleep};
 use std::time::{Duration, Instant, SystemTime};
@@ -38,7 +38,7 @@ const CONTROLS_EVERY: Duration = Duration::from_secs(10);
 /// A rate change that did not re-enumerate is read back after this long. On
 /// Windows the keyboard left the bus at the change itself (G HUB capture); the
 /// margin covers a slower drop, which has not been observed on Linux.
-const RATE_READBACK: Duration = Duration::from_secs(5);
+const RATE_READBACK: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(5) };
 /// After this long without the keyboard, a rate change is reported as failed.
 const RATE_GIVE_UP: Duration = Duration::from_secs(20);
 
@@ -47,8 +47,8 @@ pub fn install_signal_handlers() {
         STOP.store(true, Ordering::SeqCst);
     }
     for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
-        // SAFETY: the handler only stores to an atomic. No SA_RESTART, so a blocked
-        // flock or sleep returns EINTR and the caller sees STOP.
+        // SAFETY: the handler only stores to an atomic. Code that waits checks STOP
+        // between short sleeps rather than blocking in a system call.
         unsafe {
             let mut sa: libc::sigaction = std::mem::zeroed();
             sa.sa_sigaction = on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
@@ -61,7 +61,9 @@ pub fn install_signal_handlers() {
 /// Exclusive right to open the keyboard, held for the life of the owner.
 pub struct Lock(#[allow(dead_code)] File);
 
-/// Ok(None) when another loginux holds the lock (or a signal ended the wait).
+/// Ok(None) when another loginux holds the lock, or a signal ended the wait.
+/// Waiting retries every 100 ms instead of blocking in flock, so a signal that
+/// arrives at any moment ends it.
 pub fn lock(wait: bool) -> Result<Option<Lock>, String> {
     let path = ipc::runtime_dir()?.join("lock");
     let mut file = OpenOptions::new()
@@ -73,17 +75,16 @@ pub fn lock(wait: bool) -> Result<Option<Lock>, String> {
         .open(&path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     loop {
-        let op = libc::LOCK_EX | if wait { 0 } else { libc::LOCK_NB };
         // SAFETY: flock on an fd we own.
-        if unsafe { libc::flock(file.as_raw_fd(), op) } == 0 {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
             let _ = file.set_len(0).and_then(|_| writeln!(file, "{}", std::process::id()));
             return Ok(Some(Lock(file)));
         }
         match io::Error::last_os_error().raw_os_error() {
+            Some(libc::EWOULDBLOCK) if wait && !STOP.load(Ordering::SeqCst) => sleep(Duration::from_millis(100)),
             Some(libc::EWOULDBLOCK) => return Ok(None),
-            Some(libc::EINTR) if !STOP.load(Ordering::SeqCst) => continue,
-            Some(libc::EINTR) => return Ok(None),
-            _ => return Err(format!("{}: {}", path.display(), io::Error::last_os_error())),
+            // flock on a descriptor we opened fails otherwise only with EINVAL or ENOLCK
+            _ => return Err(format!("{}: {}", path.display(), io::Error::last_os_error())), // LCOV_EXCL_LINE
         }
     }
 }
@@ -108,6 +109,7 @@ pub struct Held {
     effect: Option<Effect>,
 }
 
+#[derive(Debug)]
 pub enum TakeError {
     Conflict(u8, u8),
     Hid(Error),
@@ -355,24 +357,18 @@ pub fn run(opts: Options, hosted: bool, stop: Arc<AtomicBool>, lock: Lock) -> Re
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || serve(listener, tx));
 
-    let now = Instant::now();
-    let mut engine = Engine {
-        opts,
-        model: layout::current(),
-        hosted,
-        link: None,
-        device: Device::Missing,
-        retry_at: now,
-        active: None,
-        next_reload: now,
-        preview: None,
-        check: None,
-        take_over: false,
-        message: None,
-        rate_pending: None,
-        rate_change: None,
-    };
+    let mut engine = Engine::new(opts, hosted);
     log(&format!("engine started (pid {})", std::process::id()));
+    drive(&mut engine, &rx, &stop);
+    engine.shutdown();
+    let _ = fs::remove_file(&sock);
+    drop(lock);
+    Ok(())
+}
+
+/// Answers requests as they come and ticks when none came for a TICK, until
+/// `stop`, a signal, or the end of the requests.
+fn drive(engine: &mut Engine, rx: &Receiver<Job>, stop: &AtomicBool) {
     while !stop.load(Ordering::SeqCst) && !STOP.load(Ordering::SeqCst) {
         match rx.recv_timeout(TICK) {
             Ok((req, reply)) => {
@@ -383,10 +379,6 @@ pub fn run(opts: Options, hosted: bool, stop: Arc<AtomicBool>, lock: Lock) -> Re
             Err(RecvTimeoutError::Disconnected) => break,
         }
     }
-    engine.shutdown();
-    let _ = fs::remove_file(&sock);
-    drop(lock);
-    Ok(())
 }
 
 type Job = (Request, Sender<Reply>);
@@ -425,6 +417,26 @@ fn client(stream: UnixStream, tx: Sender<Job>) {
 }
 
 impl Engine {
+    fn new(opts: Options, hosted: bool) -> Engine {
+        let now = Instant::now();
+        Engine {
+            opts,
+            model: layout::current(),
+            hosted,
+            link: None,
+            device: Device::Missing,
+            retry_at: now,
+            active: None,
+            next_reload: now,
+            preview: None,
+            check: None,
+            take_over: false,
+            message: None,
+            rate_pending: None,
+            rate_change: None,
+        }
+    }
+
     fn handle(&mut self, req: Request) -> Reply {
         let lease = Instant::now() + LEASE;
         let result = match req {
@@ -609,78 +621,72 @@ impl Engine {
     }
 
     fn connect(&mut self) {
-        let found = match self.opts.device.clone() {
-            Some(path) => hidpp::identify(&path, layout::models()).map(|m| (path, m)),
-            None => hidpp::find(layout::models()),
-        };
-        let result = found.and_then(|(path, model)| {
-            let mut kb = Keyboard::open(&path, model)?;
-            let protocol = kb.protocol()?;
-            let layout = kb.layout_code()?;
-            let statics = kb.static_effects()?;
-            let zones = zones(&mut kb, &statics)?;
-            let effects = kb.effect_ids()?;
-            let (controls, rates) = read_controls(&mut kb)?;
-            Ok((kb, protocol, layout, zones, statics, effects, controls, rates))
-        });
-        let now = Instant::now();
-        match result {
-            Ok((kb, protocol, layout, zones, statics, effects, controls, rates)) => {
-                let path = kb.path.display().to_string();
-                let model = kb.model;
-                log(&format!("{} connected on {path}: HID++ {}.{}, {} zones", model.name, protocol.0, protocol.1, zones.len()));
-                let missing = model.zones.iter().filter(|z| !zones.contains(&z.id)).count();
-                if missing > 0 {
-                    log(&format!("{missing} zones of the {} definition are not reported by this keyboard", model.name));
-                }
-                if model.id != self.model.id {
-                    self.model = model;
-                    self.active = None; // parse the chosen profile again for this keyboard
-                    self.next_reload = now;
-                }
-                if profile::chosen_keyboard().as_deref() != Some(model.id.as_str()) {
-                    let _ = profile::set_keyboard(&model.id);
-                }
-                self.device = Device::Connected {
-                    keyboard: model.id.clone(),
-                    name: model.name.clone(),
-                    path,
-                    protocol: format!("{}.{}", protocol.0, protocol.1),
-                    layout,
-                    zones: zones.clone(),
-                    effects: effect_names(model, &effects),
-                };
-                self.message = None;
-                let current = rates.as_ref().map(|r| r.1);
-                self.link = Some(Link {
-                    kb,
-                    zones,
-                    statics,
-                    effects,
-                    held: None,
-                    conflict: None,
-                    next_check: now,
-                    next_refresh: None,
-                    controls,
-                    rates,
-                    next_controls: now + CONTROLS_EVERY,
-                });
-                if self.rate_pending.is_some() {
-                    self.rate_readback(current);
-                }
+        if let Err(e) = Keyboard::find(self.opts.device.as_deref()).and_then(|kb| self.link_up(kb)) {
+            self.device = match &e {
+                Error::NotFound => Device::Missing,
+                Error::Access(..) => Device::NoAccess { error: e.to_string() },
+                _ => Device::Failed { error: e.to_string() },
+            };
+            if !matches!(e, Error::NotFound) {
+                self.say(&e.to_string());
             }
-            Err(e) => {
-                self.device = match &e {
-                    Error::NotFound => Device::Missing,
-                    Error::Access(..) => Device::NoAccess { error: e.to_string() },
-                    _ => Device::Failed { error: e.to_string() },
-                };
-                if !matches!(e, Error::NotFound) {
-                    self.say(&e.to_string());
-                }
-                self.retry_at = now + if matches!(e, Error::NotFound) { Duration::from_secs(1) } else { Duration::from_secs(3) };
-            }
+            let wait = if matches!(e, Error::NotFound) { Duration::from_secs(1) } else { Duration::from_secs(3) };
+            self.retry_at = Instant::now() + wait;
         }
+    }
+
+    /// Reads what the engine needs from a newly opened device and makes it the link.
+    fn link_up(&mut self, mut kb: Keyboard) -> Result<(), Error> {
+        let protocol = kb.protocol()?;
+        let layout = kb.layout_code()?;
+        let statics = kb.static_effects()?;
+        let zones = zones(&mut kb, &statics)?;
+        let effects = kb.effect_ids()?;
+        let (controls, rates) = read_controls(&mut kb)?;
+        let now = Instant::now();
+        let path = kb.path.display().to_string();
+        let model = kb.model;
+        log(&format!("{} connected on {path}: HID++ {}.{}, {} zones", model.name, protocol.0, protocol.1, zones.len()));
+        let missing = model.zones.iter().filter(|z| !zones.contains(&z.id)).count();
+        if missing > 0 {
+            log(&format!("{missing} zones of the {} definition are not reported by this keyboard", model.name));
+        }
+        if model.id != self.model.id {
+            self.model = model;
+            self.active = None; // parse the chosen profile again for this keyboard
+            self.next_reload = now;
+        }
+        if profile::chosen_keyboard().as_deref() != Some(model.id.as_str()) {
+            let _ = profile::set_keyboard(&model.id);
+        }
+        self.device = Device::Connected {
+            keyboard: model.id.clone(),
+            name: model.name.clone(),
+            path,
+            protocol: format!("{}.{}", protocol.0, protocol.1),
+            layout,
+            zones: zones.clone(),
+            effects: effect_names(model, &effects),
+        };
+        self.message = None;
+        let current = rates.as_ref().map(|r| r.1);
+        self.link = Some(Link {
+            kb,
+            zones,
+            statics,
+            effects,
+            held: None,
+            conflict: None,
+            next_check: now,
+            next_refresh: None,
+            controls,
+            rates,
+            next_controls: now + CONTROLS_EVERY,
+        });
+        if self.rate_pending.is_some() {
+            self.rate_readback(current);
+        }
+        Ok(())
     }
 
     /// What the device should show, or None for its onboard lighting.
@@ -887,5 +893,592 @@ impl Drop for Hosted {
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fake::{self, Fake};
+
+    /// An engine whose configured device does not exist, so it never opens real hardware.
+    fn engine() -> Engine {
+        Engine::new(Options { device: Some("/nonexistent/loginux-test".into()), refresh: None }, false)
+    }
+
+    /// An engine linked to a simulated G316.
+    fn linked() -> (Engine, Fake) {
+        let mut e = engine();
+        let (kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        e.link_up(kb).unwrap();
+        (e, fake)
+    }
+
+    fn colours(name: &str, esc: Rgb) {
+        let m = layout::find("g316-x-98").unwrap();
+        let mut p = Profile::default();
+        p.bases.insert("keys".into(), [0x10, 0x20, 0x30]);
+        p.zones.insert(38, esc);
+        profile::save(m, name, &p).unwrap();
+    }
+
+    fn ok(reply: Reply) -> Status {
+        match reply {
+            Reply::Ok(s) => s,
+            Reply::Err(e) => panic!("refused: {e}"),
+        }
+    }
+
+    #[test]
+    fn take_records_the_claim_and_give_back_clears_it() {
+        let _serial = crate::testenv::serial();
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        clear_marker(&kb.model.id);
+        let held = take(&mut kb, false).unwrap();
+        assert_eq!((held.restore, held.state, fake.state().sw), ((0, 0), (1, 0), (1, 0)));
+        assert_eq!(read_marker(&kb.model.id), Some(((0, 0), Some((1, 0)))));
+        assert_eq!(give_back(&mut kb, held.restore).unwrap(), (0, 0));
+        assert_eq!((fake.state().sw, read_marker(&kb.model.id)), ((0, 0), None));
+    }
+
+    #[test]
+    fn another_programs_claim_is_a_conflict_unless_forced() {
+        let _serial = crate::testenv::serial();
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        clear_marker(&kb.model.id);
+        fake.state().sw = (1, 5);
+        assert!(matches!(take(&mut kb, false), Err(TakeError::Conflict(1, 5))));
+        assert_eq!(fake.state().sw, (1, 5), "nothing was written");
+        let held = take(&mut kb, true).unwrap();
+        assert_eq!(held.restore, (0, 0), "a forced take-over hands back plain firmware control");
+        release_now(&mut kb).unwrap();
+        assert_eq!(fake.state().sw, (0, 0));
+    }
+
+    #[test]
+    fn an_earlier_loginux_claim_is_adopted() {
+        let _serial = crate::testenv::serial();
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        write_marker(&kb.model.id, (0, 6), Some((1, 0)));
+        fake.state().sw = (1, 0);
+        let held = take(&mut kb, false).unwrap();
+        assert_eq!(held.restore, (0, 6), "the original state from before the earlier claim");
+        assert_eq!(release_now(&mut kb).unwrap(), (0, 6));
+    }
+
+    #[test]
+    fn paint_sets_static_then_sends_the_frame_twice() {
+        let _serial = crate::testenv::serial();
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        let statics = kb.static_effects().unwrap();
+        take(&mut kb, true).unwrap();
+        paint(&mut kb, &statics, [1, 2, 3], &[(38, [255, 0, 0]), (39, [0, 255, 0])]).unwrap();
+        let st = fake.state();
+        assert_eq!(st.effects[&0].0, 1, "cluster 0 runs Static");
+        assert_eq!(&st.effects[&1].1[..3], &[1, 2, 3], "with the base colour");
+        assert_eq!((st.frames, st.shown[&38], st.shown[&39]), (2, [255, 0, 0], [0, 255, 0]));
+    }
+
+    #[test]
+    fn a_clusters_device_paints_only_its_defined_lights() {
+        let _serial = crate::testenv::serial();
+        let (mut kb, fake) = fake::keyboard("g903-hero", fake::g903());
+        let statics = kb.static_effects().unwrap();
+        assert_eq!(zones(&mut kb, &statics).unwrap(), vec![0, 1]);
+        take(&mut kb, true).unwrap();
+        paint(&mut kb, &statics, [0; 3], &[(1, [0, 255, 0])]).unwrap();
+        let st = fake.state();
+        assert_eq!(st.effects.get(&1).map(|e| (e.0, e.1[1])), Some((1, 255)));
+        assert!(!st.effects.contains_key(&0), "the DPI indicator is never written");
+        assert_eq!(st.frames, 0, "no per-key frames on a mouse");
+    }
+
+    #[test]
+    fn effects_run_on_every_cluster_or_fall_back_to_their_colour() {
+        let _serial = crate::testenv::serial();
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        let (statics, lists) = (kb.static_effects().unwrap(), kb.effect_ids().unwrap());
+        take(&mut kb, true).unwrap();
+        play(&mut kb, &lists, &statics, &Effect::parse("wave,period=3000").unwrap()).unwrap();
+        {
+            let st = fake.state();
+            assert_eq!((st.effects[&0].0, st.effects[&1].0), (4, 4));
+        }
+        play(&mut kb, &lists, &statics, &Effect::parse("ripple,color=ff0000").unwrap()).unwrap();
+        let st = fake.state();
+        assert_eq!(st.effects[&0].0, 5, "cluster 0 has ripple (0x17)");
+        assert_eq!((st.effects[&1].0, &st.effects[&1].1[..3]), (1, &[255, 0, 0][..]), "cluster 1 shows the colour as Static");
+    }
+
+    #[test]
+    fn which_clusters_and_effects_a_device_offers() {
+        crate::testenv::init();
+        let g316 = layout::find("g316-x-98").unwrap();
+        let g903 = layout::find("g903-hero").unwrap();
+        let lists = vec![vec![0, 1, 0x0a, 0x15, 0x16, 0x17], vec![0, 1, 0x0a, 0x15, 0x16]];
+        assert_eq!(effect_names(g316, &lists), ["breathe", "cycle", "wave", "ripple"]);
+        let mouse = vec![vec![0, 1, 3, 0x0a], vec![0, 1, 3, 0x0a]];
+        assert_eq!(effect_names(g903, &mouse), ["breathe", "cycle"]);
+        assert_eq!(targets(g903, 2).collect::<Vec<_>>(), [1], "only the logo cluster");
+        assert_eq!(targets(g316, 2).collect::<Vec<_>>(), [0, 1]);
+    }
+
+    #[test]
+    fn switching_between_saved_profiles_and_presets() {
+        let _serial = crate::testenv::serial();
+        let (mut e, fake) = linked();
+        clear_marker("g316-x-98");
+        colours("T evening", [255, 0, 0]);
+
+        // A saved colour profile: claimed, Static base, the frame drawn.
+        let s = ok(e.handle(Request::Use { profile: Some("T evening".into()) }));
+        assert_eq!(s.active.as_deref(), Some("T evening"));
+        assert_eq!(profile::active().as_deref(), Some("T evening"));
+        e.step().unwrap();
+        assert_eq!(fake.state().sw, (1, 0));
+        {
+            let st = fake.state();
+            assert_eq!((st.shown[&38], st.shown[&39], st.frames), ([255, 0, 0], [0x10, 0x20, 0x30], 2));
+        }
+        assert!(matches!(e.status().control, Control::Profile { ref name } if name == "T evening"));
+
+        // A built-in preset: the device runs the wave, no frames are sent.
+        ok(e.handle(Request::Use { profile: Some("Wave".into()) }));
+        e.step().unwrap();
+        assert_eq!(fake.state().effects[&0].0, 4);
+        assert_eq!(&fake.state().effects[&0].1[6..10], &[0x0b, 0xb8, 100, 1], "period 3000 ms, intensity, direction right");
+        let frames = fake.state().frames;
+        e.step().unwrap();
+        assert_eq!(fake.state().frames, frames, "a running effect is not sent again");
+
+        // Back to the colours: Static again on every cluster, then the frame twice.
+        ok(e.handle(Request::Use { profile: Some("T evening".into()) }));
+        e.step().unwrap();
+        {
+            let st = fake.state();
+            assert_eq!((st.effects[&0].0, st.frames), (1, frames + 2));
+        }
+
+        // A hand edit to the file applies on the next reload.
+        colours("T evening", [0, 255, 0]);
+        e.reload();
+        e.step().unwrap();
+        assert_eq!(fake.state().shown[&38], [0, 255, 0]);
+
+        // No profile: the lighting goes back to the keyboard.
+        ok(e.handle(Request::Use { profile: None }));
+        e.step().unwrap();
+        assert_eq!(fake.state().sw, (0, 0));
+        assert!(matches!(e.status().control, Control::Onboard));
+        assert!(matches!(e.handle(Request::Use { profile: Some("T missing".into()) }), Reply::Err(_)));
+        profile::delete("T evening").unwrap();
+    }
+
+    #[test]
+    fn previews_and_channel_checks_lapse_back_to_the_profile() {
+        let _serial = crate::testenv::serial();
+        let (mut e, fake) = linked();
+        colours("T base", [1, 1, 1]);
+        ok(e.handle(Request::Use { profile: Some("T base".into()) }));
+        e.step().unwrap();
+
+        let mut preview = Profile::default();
+        preview.zones.insert(38, [9, 9, 9]);
+        ok(e.handle(Request::Preview { profile: Some(preview) }));
+        e.step().unwrap();
+        assert_eq!(fake.state().shown[&38], [9, 9, 9]);
+        assert!(matches!(e.status().control, Control::Preview));
+
+        ok(e.handle(Request::Check { zone: Some(39) }));
+        e.step().unwrap();
+        {
+            let st = fake.state();
+            assert_eq!((st.shown[&39], st.shown[&38]), ([0xFF; 3], [0; 3]), "one zone white, the rest dark");
+        }
+        assert!(matches!(e.status().control, Control::Check { zone: 39 }));
+        assert!(matches!(e.handle(Request::Check { zone: Some(250) }), Reply::Err(_)));
+
+        ok(e.handle(Request::Check { zone: None }));
+        ok(e.handle(Request::Preview { profile: None }));
+        e.step().unwrap();
+        assert_eq!(fake.state().shown[&38], [1, 1, 1]);
+        let mut stray = Profile::default();
+        stray.zones.insert(250, [1, 2, 3]);
+        assert!(matches!(e.handle(Request::Preview { profile: Some(stray) }), Reply::Err(_)));
+        profile::set_active(None).unwrap();
+        profile::delete("T base").unwrap();
+    }
+
+    #[test]
+    fn a_conflict_waits_for_a_take_over() {
+        let _serial = crate::testenv::serial();
+        let (mut e, fake) = linked();
+        colours("T conflict", [5, 5, 5]);
+        ok(e.handle(Request::Use { profile: Some("T conflict".into()) }));
+        e.step().unwrap();
+        fake.state().sw = (1, 5); // another program claims the lighting
+        e.link.as_mut().unwrap().next_check = Instant::now();
+        e.step().unwrap();
+        assert!(matches!(e.status().control, Control::Conflict { mode: 1, flags: 5 }));
+        e.step().unwrap();
+        assert_eq!(fake.state().sw, (1, 5), "loginux waits instead of overwriting");
+        ok(e.handle(Request::TakeOver));
+        e.step().unwrap();
+        assert_eq!(fake.state().sw, (1, 0));
+        assert!(matches!(e.status().control, Control::Profile { .. }));
+        e.shutdown();
+        assert_eq!(fake.state().sw, (0, 0), "shutdown hands back plain firmware control");
+        profile::set_active(None).unwrap();
+        profile::delete("T conflict").unwrap();
+    }
+
+    #[test]
+    fn report_rate_changes_refusals_and_readback() {
+        let _serial = crate::testenv::serial();
+        let (mut e, fake) = linked();
+        fake.state().refuse_rate = Some((6, 2));
+        let Reply::Err(refused) = e.handle(Request::SetReportRate { hz: 8000 }) else { panic!("8000 Hz was accepted") };
+        assert_eq!(refused, "the keyboard refused 8000 Hz (HID++ error 0x02); it stays at 1000 Hz");
+        assert!(matches!(e.status().rate_change, Some(RateChange::Failed { hz: 8000, .. })));
+        assert!(matches!(e.handle(Request::SetReportRate { hz: 1234 }), Reply::Err(_)));
+        ok(e.handle(Request::SetReportRate { hz: 1000 }));
+        assert!(matches!(e.status().rate_change, Some(RateChange::Done { hz: 1000 })), "already at that rate");
+        ok(e.handle(Request::SetReportRate { hz: 2000 }));
+        assert_eq!(fake.state().rate, 4);
+        assert!(matches!(e.handle(Request::SetReportRate { hz: 4000 }), Reply::Err(_)), "one change at a time");
+        e.rate_readback(Some(4));
+        assert!(matches!(e.status().rate_change, Some(RateChange::Done { hz: 2000 })));
+        assert_eq!(e.status().controls.unwrap().report_rates, [1000, 2000, 4000, 8000]);
+    }
+
+    #[test]
+    fn effects_a_device_lacks_are_refused_without_a_claim() {
+        let _serial = crate::testenv::serial();
+        let mut e = engine();
+        let (kb, fake) = fake::keyboard("g903-hero", fake::g903());
+        e.link_up(kb).unwrap();
+        assert!(matches!(&e.status().device, Device::Connected { effects, .. } if effects == &["breathe", "cycle"]));
+        ok(e.handle(Request::Use { profile: Some("Wave".into()) }));
+        e.step().unwrap();
+        assert_eq!(e.status().message.as_deref(), Some("the Logitech G903 HERO has no wave effect"));
+        assert_eq!(fake.state().sw, (0, 0), "nothing was claimed");
+        ok(e.handle(Request::Use { profile: Some("Breathing".into()) }));
+        e.step().unwrap();
+        {
+            let st = fake.state();
+            assert_eq!((st.sw.0, st.effects[&1].0), (1, 3), "breathe is effect 3 on the logo");
+        }
+        e.shutdown();
+    }
+
+    #[test]
+    fn no_device_means_no_link_and_a_clear_status() {
+        let _serial = crate::testenv::serial();
+        let mut e = engine();
+        e.connect();
+        assert!(e.link.is_none());
+        assert!(matches!(e.status().device, Device::NoAccess { .. } | Device::Failed { .. }));
+        assert!(matches!(e.handle(Request::SetReportRate { hz: 1000 }), Reply::Err(m) if m.contains("not connected")));
+        assert!(matches!(e.handle(Request::Status), Reply::Ok(_)));
+        e.tick(); // retries later, never touches other devices
+        assert!(e.link.is_none());
+    }
+
+    fn preview() -> Option<(Profile, Instant)> {
+        Some((Profile::default(), Instant::now() + LEASE))
+    }
+
+    fn pending(index: u8, hz: u32, sent: Instant) -> Option<RatePending> {
+        Some(RatePending { index, hz, sent })
+    }
+
+    fn failed(e: &Engine) -> String {
+        match &e.rate_change {
+            Some(RateChange::Failed { error, .. }) => error.clone(),
+            other => panic!("not a failed change: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_failing_keyboard_fails_the_take() {
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        fake.state().refuse = Some(Box::new(|feature, function, _| ((feature, function) == (0x8071, 5)).then_some(4)));
+        assert!(matches!(take(&mut kb, false), Err(TakeError::Hid(Error::Device(_, 4)))));
+    }
+
+    #[test]
+    fn clusters_without_static_are_left_alone() {
+        let (mut kb, fake) = fake::keyboard("g903-hero", fake::g903());
+        update(&mut kb, &[], &[(1, [1, 2, 3])]).unwrap();
+        let lists = kb.effect_ids().unwrap();
+        play(&mut kb, &lists, &[], &Effect::parse("ripple").unwrap()).unwrap(); // the logo has no ripple
+        assert!(fake.state().effects.is_empty());
+    }
+
+    #[test]
+    fn optional_reads_fail_only_when_the_keyboard_is_gone() {
+        let gone = Error::Gone(io::Error::from_raw_os_error(libc::ENODEV));
+        assert!(matches!(optional::<u8>(Err(gone)), Err(Error::Gone(_))));
+        let timeout = Error::Timeout(crate::hidpp::Call { feature: 0x8040, function: 0 });
+        assert!(matches!(optional::<u8>(Err(timeout)), Ok(None)));
+        assert!(matches!(optional(Ok(Some(1))), Ok(Some(1))));
+    }
+
+    #[test]
+    fn clients_get_a_reply_per_line_until_either_side_leaves() {
+        let (tx, rx) = mpsc::channel::<Job>();
+        let (ours, theirs) = UnixStream::pair().unwrap();
+        let session = thread::spawn(move || client(ours, tx));
+        (&theirs).write_all(b"garbage\n").unwrap();
+        let mut reply = String::new();
+        BufReader::new(&theirs).read_line(&mut reply).unwrap();
+        assert!(reply.starts_with("{\"err\":\"bad request"), "{reply}");
+        drop(rx); // the engine stopped: the next request ends the session
+        let status = serde_json::to_string(&Request::Status).unwrap() + "\n";
+        (&theirs).write_all(status.as_bytes()).unwrap();
+        session.join().unwrap();
+
+        // A client that leaves before its reply.
+        let (tx, _rx) = mpsc::channel::<Job>();
+        let (ours, theirs) = UnixStream::pair().unwrap();
+        (&theirs).write_all(b"garbage\n").unwrap();
+        drop(theirs);
+        client(ours, tx);
+    }
+
+    #[test]
+    fn the_engine_loop_ends_with_its_requests() {
+        let _serial = crate::testenv::serial();
+        let mut e = engine();
+        let (tx, rx) = mpsc::channel::<Job>();
+        drop(tx);
+        drive(&mut e, &rx, &AtomicBool::new(false));
+    }
+
+    #[test]
+    fn rate_readbacks_name_what_the_keyboard_reports() {
+        let mut e = engine();
+        for (current, says) in [
+            (Some(3), "the keyboard reports 1000 Hz"),
+            (Some(9), "the keyboard reports index 9"),
+            (None, "the keyboard did not report its rate after the change"),
+        ] {
+            e.rate_pending = pending(4, 2000, Instant::now());
+            e.rate_readback(current);
+            assert_eq!(failed(&e), says);
+        }
+        e.rate_readback(Some(4));
+        assert_eq!(failed(&e), "the keyboard did not report its rate after the change", "nothing was pending");
+    }
+
+    #[test]
+    fn a_keyboard_without_its_rate_feature_cannot_change_rate() {
+        let _serial = crate::testenv::serial();
+        let mut e = engine();
+        let (kb, _fake) = fake::keyboard("g903-hero", fake::g903());
+        e.link_up(kb).unwrap();
+        e.link.as_mut().unwrap().rates = Some((vec![3, 4], 3));
+        let Reply::Err(error) = e.handle(Request::SetReportRate { hz: 2000 }) else { panic!("accepted") };
+        assert_eq!(error, "keyboard does not report HID++ feature 0x8061");
+    }
+
+    #[test]
+    fn ticks_end_leases_and_give_up_on_a_lost_rate_change() {
+        let _serial = crate::testenv::serial();
+        let mut e = engine();
+        let past = Instant::now() - Duration::from_millis(1);
+        e.preview = Some((Profile::default(), past));
+        e.check = Some((38, past));
+        e.rate_pending = pending(4, 2000, Instant::now() - RATE_GIVE_UP - Duration::from_secs(1));
+        e.tick();
+        assert!(e.preview.is_none() && e.check.is_none() && e.rate_pending.is_none());
+        assert_eq!(failed(&e), "the keyboard did not come back within 20 s; Loginux keeps looking for it");
+    }
+
+    #[test]
+    fn a_lost_or_failing_keyboard_drops_the_link() {
+        let _serial = crate::testenv::serial();
+        // Gone after a rate change: logged, not shown, and looked for again soon.
+        let (mut e, fake) = linked();
+        e.rate_pending = pending(4, 2000, Instant::now());
+        fake.unplug();
+        e.tick();
+        assert!(e.link.is_none() && matches!(e.device, Device::Missing) && e.message.is_none());
+        // A keyboard that rejects what it should answer: shown, and retried later.
+        let (mut e, fake) = linked();
+        e.preview = preview();
+        fake.state().refuse = Some(Box::new(|feature, function, _| ((feature, function) == (0x8071, 5)).then_some(4)));
+        let before = Instant::now();
+        e.tick();
+        assert!(e.link.is_none() && matches!(e.device, Device::Failed { .. }));
+        assert!(e.message.as_deref().unwrap().contains("HID++ error 0x04"));
+        assert!(e.retry_at >= before + Duration::from_secs(5));
+    }
+
+    #[test]
+    fn reload_follows_config_and_keeps_a_broken_profiles_last_version() {
+        let _serial = crate::testenv::serial();
+        let mut e = engine();
+        colours("T reload", [1, 2, 3]);
+        profile::set_active(Some("T reload")).unwrap();
+        e.reload();
+        let stamp = e.active.as_ref().unwrap().2;
+        e.reload(); // unchanged
+        assert_eq!(e.active.as_ref().unwrap().2, stamp);
+        let path = profile::path("T reload").unwrap();
+        fs::write(&path, "zones = ").unwrap();
+        let later = SystemTime::now() + Duration::from_secs(5);
+        File::options().write(true).open(&path).unwrap().set_modified(later).unwrap();
+        e.reload();
+        let (name, kept, stamp) = e.active.as_ref().unwrap();
+        assert_eq!((name.as_str(), kept.zones[&38], *stamp), ("T reload", [1, 2, 3], Some(later)));
+        assert!(e.message.as_deref().unwrap().contains("T reload.toml"));
+
+        let config = crate::testenv::init().join("config/loginux/config.toml");
+        fs::write(&config, "profile = \"../elsewhere\"\n").unwrap();
+        e.reload();
+        assert!(e.active.is_none());
+        assert_eq!(e.message.as_deref(), Some("config.toml names an invalid profile \"../elsewhere\""));
+        profile::set_active(Some("T reload")).unwrap();
+        e.reload();
+        profile::set_active(Some("T absent")).unwrap(); // a profile with no file: nothing to keep
+        e.reload();
+        assert!(e.active.is_none());
+        profile::set_active(None).unwrap();
+        profile::delete("T reload").unwrap();
+    }
+
+    #[test]
+    fn connecting_finds_plugged_keyboards_and_explains_failures() {
+        let _serial = crate::testenv::serial();
+        let mut e = Engine::new(Options { device: None, refresh: None }, false);
+        e.connect();
+        assert!(matches!(e.device, Device::Missing) && e.message.is_none(), "nothing plugged in: no message");
+        let file = crate::testenv::init().join("not-a-keyboard");
+        fs::write(&file, "").unwrap();
+        let mut e = Engine::new(Options { device: Some(file), refresh: None }, false);
+        e.connect();
+        assert!(matches!(&e.device, Device::Failed { error } if error.contains("not the HID++ interface")));
+        let _fake = fake::plug("/dev/fake-connect", "g316-x-98", fake::g316());
+        let mut e = Engine::new(Options { device: Some("/dev/fake-connect".into()), refresh: None }, false);
+        e.connect();
+        assert!(e.link.is_some() && matches!(&e.device, Device::Connected { path, .. } if path == "/dev/fake-connect"));
+    }
+
+    #[test]
+    fn a_keyboard_back_from_a_rate_change_is_read_back() {
+        let _serial = crate::testenv::serial();
+        let mut spec = fake::g316();
+        spec.zones.retain(|&z| z != 38); // this one does not report Esc
+        let (kb, _fake) = fake::keyboard("g316-x-98", spec);
+        let mut e = engine();
+        e.rate_pending = pending(3, 1000, Instant::now());
+        e.link_up(kb).unwrap();
+        assert!(matches!(e.rate_change, Some(RateChange::Done { hz: 1000 })));
+        e.check = Some((38, Instant::now() + LEASE));
+        let link = e.link.as_ref().unwrap();
+        assert_eq!(e.desired(&link.zones, &link.effects).err().as_deref(), Some("zone 38 is not reported by this keyboard"));
+    }
+
+    #[test]
+    fn controls_follow_notifications_and_periodic_reads() {
+        let _serial = crate::testenv::serial();
+        let (mut e, fake) = linked();
+        fake.notify(13, 0, &[1]); // 0x4523 game mode, at feature index 13 on the G316
+        e.step().unwrap();
+        assert_eq!(e.link.as_ref().unwrap().controls.game_mode, Some(true));
+        e.link.as_mut().unwrap().next_controls = Instant::now();
+        e.step().unwrap();
+        assert_eq!(e.link.as_ref().unwrap().controls.game_mode, Some(false), "read again from the keyboard");
+        // A rate change the keyboard kept its connection through: read back on schedule.
+        fake.state().rate = 4;
+        e.rate_pending = pending(4, 2000, Instant::now() - RATE_READBACK - Duration::from_secs(1));
+        e.step().unwrap();
+        assert!(matches!(e.rate_change, Some(RateChange::Done { hz: 2000 })));
+        assert_eq!(e.link.as_ref().unwrap().controls.report_rate, Some(2000));
+    }
+
+    #[test]
+    fn claims_lost_refused_and_released_by_others() {
+        let _serial = crate::testenv::serial();
+        clear_marker("g316-x-98");
+        let (mut e, fake) = linked();
+        e.preview = preview();
+        // Another program holds the lighting before loginux claims it.
+        fake.state().sw = (1, 5);
+        e.step().unwrap();
+        assert_eq!(e.link.as_ref().unwrap().conflict, Some((1, 5)));
+        // It lets go: the conflict ends, and the next check claims.
+        fake.state().sw = (0, 0);
+        e.link.as_mut().unwrap().next_check = Instant::now();
+        e.step().unwrap();
+        assert_eq!(e.link.as_ref().unwrap().conflict, None);
+        e.step().unwrap();
+        assert_eq!(fake.state().sw, (1, 0));
+        // The keyboard takes its lighting back (a reset): claimed again.
+        fake.state().sw = (0, 0);
+        e.link.as_mut().unwrap().next_check = Instant::now();
+        e.step().unwrap();
+        assert_eq!(fake.state().sw, (1, 0));
+        // A claim the keyboard refuses ends the link.
+        fake.state().sw = (0, 0);
+        fake.state().refuse = Some(Box::new(|feature, function, p| (feature == 0x8071 && function == 5 && p[0] == 1).then_some(4)));
+        e.link.as_mut().unwrap().next_check = Instant::now();
+        assert!(matches!(e.step(), Err(Error::Device(_, 4))));
+        clear_marker("g316-x-98");
+    }
+
+    #[test]
+    fn shutdown_reports_a_keyboard_it_cannot_hand_back_to() {
+        let _serial = crate::testenv::serial();
+        let (mut e, fake) = linked();
+        e.preview = preview();
+        e.step().unwrap();
+        assert!(e.link.as_ref().unwrap().held.is_some());
+        fake.unplug();
+        e.shutdown(); // logs, and leaves the claim recorded for the next engine
+        assert!(read_marker("g316-x-98").is_some());
+        clear_marker("g316-x-98");
+    }
+
+    #[test]
+    fn a_hosted_engine_logs_a_socket_it_cannot_bind() {
+        let _serial = crate::testenv::serial();
+        let sock = ipc::socket_path().unwrap();
+        let _ = fs::remove_file(&sock);
+        fs::create_dir(&sock).unwrap(); // something else is in the way
+        let hosted = Hosted::start(Options { device: Some("/nonexistent/loginux-test".into()), refresh: None });
+        drop(hosted.unwrap().expect("the lock was free"));
+        fs::remove_dir(&sock).unwrap();
+        assert!(lock(false).unwrap().is_some(), "the failed engine let go of the lock");
+    }
+
+    #[test]
+    fn waiting_for_the_lock_ends_with_it_or_with_a_signal() {
+        let _serial = crate::testenv::serial();
+        let held = lock(false).unwrap().expect("free");
+        let waiter = thread::spawn(|| lock(true));
+        thread::sleep(Duration::from_millis(250));
+        assert!(!waiter.is_finished(), "still waiting");
+        drop(held);
+        assert!(waiter.join().unwrap().unwrap().is_some(), "the lock, once it was free");
+        let held = lock(false).unwrap().expect("free");
+        let waiter = thread::spawn(|| lock(true));
+        thread::sleep(Duration::from_millis(150));
+        STOP.store(true, Ordering::SeqCst); // what the signal handler does
+        let result = waiter.join().unwrap();
+        STOP.store(false, Ordering::SeqCst);
+        drop(held);
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn only_one_engine_holds_the_lock() {
+        let _serial = crate::testenv::serial();
+        let first = lock(false).unwrap().expect("free");
+        assert!(lock(false).unwrap().is_none());
+        assert_eq!(owner(), Some(std::process::id()));
+        drop(first);
+        assert!(lock(false).unwrap().is_some());
     }
 }

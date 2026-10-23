@@ -9,7 +9,7 @@
 //! USB device can re-enumerate. Brightness and game mode are read only. DFU,
 //! reset and engineering features are never resolved or called.
 
-use crate::hidpp::{BUSY, Call, Error, Hidpp};
+use crate::hidpp::{self, BUSY, Call, Error, Hidpp};
 use crate::layout::Model;
 use crate::profile::Rgb;
 use std::path::{Path, PathBuf};
@@ -125,8 +125,18 @@ pub struct Probe {
 }
 
 pub fn probe(path: &Path) -> Result<Probe, Error> {
+    #[cfg(test)]
+    if let Some((io, m)) = crate::fake::plugged(path) {
+        return probe_on(io, path, (m.vendor, m.product, m.interface, m.name.clone()));
+    }
     let io = Hidpp::open_unchecked(path, 0xFF)?;
-    let (vendor, product, interface, hid_name) = io.identity(path).ok_or_else(|| Error::WrongDevice(path.into()))?;
+    let identity = io.identity(path).ok_or_else(|| Error::WrongDevice(path.into()))?;
+    probe_on(io, path, identity)
+}
+
+/// The reads behind `probe`, on an opened transport with its sysfs identity.
+fn probe_on(io: Hidpp, path: &Path, identity: (u16, u16, u8, String)) -> Result<Probe, Error> {
+    let (vendor, product, interface, hid_name) = identity;
     // The model is unused by these reads; any definition will do.
     let mut kb = Keyboard {
         io,
@@ -214,15 +224,28 @@ pub fn probe(path: &Path) -> Result<Probe, Error> {
 }
 
 impl Keyboard {
-    pub fn open(path: &Path, model: &'static Model) -> Result<Self, Error> {
-        let mut kb = Keyboard {
-            io: Hidpp::open(path, model)?,
-            path: path.into(),
-            model,
-            rgb: 0,
-            per_key: 0,
-            optional: Optional::default(),
+    /// The keyboard at `path`, or else the first supported one plugged in.
+    pub fn find(path: Option<&Path>) -> Result<Self, Error> {
+        #[cfg(test)]
+        if let Some(path) = path
+            && let Some((io, model)) = crate::fake::plugged(path)
+        {
+            return Self::attach(io, path, model);
+        }
+        let (path, model) = match path {
+            Some(path) => (path.to_path_buf(), hidpp::identify(path, crate::layout::models())?),
+            None => hidpp::find(crate::layout::models())?,
         };
+        Self::open(&path, model)
+    }
+
+    pub fn open(path: &Path, model: &'static Model) -> Result<Self, Error> {
+        Self::attach(Hidpp::open(path, model)?, path, model)
+    }
+
+    /// Resolves the features of `model` on an opened transport.
+    pub(crate) fn attach(io: Hidpp, path: &Path, model: &'static Model) -> Result<Self, Error> {
+        let mut kb = Keyboard { io, path: path.into(), model, rgb: 0, per_key: 0, optional: Optional::default() };
         kb.rgb = kb.feature(RGB_EFFECTS)?.ok_or(Error::Unsupported(RGB_EFFECTS))?;
         if model.per_key {
             kb.per_key = kb.feature(PER_KEY)?.ok_or(Error::Unsupported(PER_KEY))?;
@@ -422,4 +445,221 @@ impl Keyboard {
             .collect()
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fake;
+
+    #[test]
+    fn reads_everything_the_engine_needs_from_a_g316() {
+        let (mut kb, _fake) = fake::keyboard("g316-x-98", fake::g316());
+        assert_eq!(kb.protocol().unwrap(), (4, 2));
+        assert_eq!(kb.layout_code().unwrap(), Some(1));
+        let mut want: Vec<u8> = kb.model.zones.iter().map(|z| z.id).collect();
+        want.sort_unstable();
+        assert_eq!(kb.zones().unwrap(), want);
+        assert_eq!(kb.static_effects().unwrap(), vec![(0, 1), (1, 1)]);
+        assert_eq!(kb.effect_ids().unwrap()[1], vec![0x0000, 0x0001, 0x000a, 0x0015, 0x0016]);
+        assert_eq!(kb.brightness().unwrap(), Some((100, 100)));
+        assert_eq!(kb.report_rates().unwrap(), Some((vec![3, 4, 5, 6], 3)));
+        assert_eq!(kb.game_mode().unwrap(), Some(false));
+    }
+
+    #[test]
+    fn effects_need_software_control_and_stay_in_ram() {
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        let refused = kb.set_static((0, 1), [1, 2, 3]).unwrap_err();
+        assert!(matches!(refused, Error::Device(_, 5)), "{refused}");
+        kb.set_sw_control(1, 0).unwrap();
+        assert_eq!(kb.sw_control().unwrap(), (1, 0));
+        kb.set_static((0, 1), [1, 2, 3]).unwrap();
+        kb.set_effect(1, 4, [0, 255, 0, 0, 0, 0, 0x0b, 0xb8, 100, 1]).unwrap();
+        let st = fake.state();
+        assert_eq!(st.effects[&0], (1, [1, 2, 3, 0, 0, 0, 0, 0, 0, 0], 0x01));
+        assert_eq!(st.effects[&1].2, 0x01, "persistence: RAM, never flash");
+    }
+
+    #[test]
+    fn frames_go_four_zones_per_report_then_one_frame_end() {
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        let frame: Vec<(u8, Rgb)> = (1..=9).map(|z| (z, [z, 0, 0])).collect();
+        kb.send_frame(&frame).unwrap();
+        let st = fake.state();
+        assert_eq!((st.frames, st.shown.len(), st.shown[&9]), (1, 9, [9, 0, 0]));
+        assert_eq!(st.log.iter().filter(|r| r.0 == PER_KEY && r.1 == 1).count(), 3);
+    }
+
+    #[test]
+    fn report_rate_changes_and_refusals() {
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        kb.set_report_rate(4).unwrap();
+        assert_eq!(fake.state().rate, 4);
+        fake.state().refuse_rate = Some((6, 2));
+        let refused = kb.set_report_rate(6).unwrap_err();
+        assert!(matches!(refused, Error::Device(Call { feature: REPORT_RATE, function: 3 }, 2)));
+        assert_eq!(fake.state().rate, 4);
+    }
+
+    #[test]
+    fn the_write_boundary_refuses_before_anything_is_sent() {
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        let (rgb, per_key) = (kb.rgb, kb.per_key);
+        // manageNvConfig: the get form passes, the set form (an EEPROM write) never leaves.
+        assert!(kb.call(RGB_EFFECTS, rgb, 3, &[0, 0x00, 0x01]).is_ok());
+        assert!(matches!(kb.call(RGB_EFFECTS, rgb, 3, &[1, 0x00, 0x01, 2]), Err(Error::Refused(_))));
+        // Functions and features nobody listed: 0x8081 function 6, firmware update.
+        assert!(matches!(kb.call(PER_KEY, per_key, 6, &[]), Err(Error::Refused(_))));
+        assert!(matches!(kb.call(0x00c3, 9, 0, &[]), Err(Error::Refused(_))));
+        assert!(fake.requests(RGB_EFFECTS).iter().all(|(f, p)| !(*f == 3 && p[0] != 0)), "an NV write reached the device");
+        assert!(fake.requests(PER_KEY).iter().all(|(f, _)| *f != 6));
+        assert!(fake.requests(0x00c3).is_empty());
+    }
+
+    #[test]
+    fn game_mode_notifications_become_events() {
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        fake.notify(kb.optional.game_mode.unwrap(), 0, &[1]);
+        kb.alive().unwrap();
+        assert!(matches!(kb.events()[..], [Event::GameMode(true)]));
+        assert!(kb.events().is_empty(), "each notification is handed out once");
+    }
+
+    #[test]
+    fn an_unplugged_device_is_gone() {
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        fake.unplug();
+        assert!(matches!(kb.alive(), Err(Error::Gone(_))));
+    }
+
+    #[test]
+    fn the_g903_has_clusters_and_no_optional_controls() {
+        let (mut kb, _fake) = fake::keyboard("g903-hero", fake::g903());
+        assert_eq!(kb.layout_code().unwrap(), None);
+        assert_eq!(kb.static_effects().unwrap(), vec![(0, 1), (1, 1)]);
+        assert_eq!((kb.report_rates().unwrap(), kb.brightness().unwrap(), kb.game_mode().unwrap()), (None, None, None));
+        assert!(matches!(kb.set_report_rate(3), Err(Error::Unsupported(REPORT_RATE))));
+    }
+
+    #[test]
+    fn a_per_key_definition_needs_per_key_lighting() {
+        let model = crate::layout::find("g316-x-98").unwrap();
+        let (io, _fake) = fake::transport(fake::g903(), 0xFF);
+        assert!(matches!(Keyboard::attach(io, Path::new("/dev/fake"), model), Err(Error::Unsupported(PER_KEY))));
+    }
+
+    #[test]
+    fn probe_reads_a_g903_like_the_live_probe() {
+        let (io, fake) = fake::transport(fake::g903(), 0xFF);
+        let p = probe_on(io, Path::new("/dev/fake"), (0x046d, 0xc091, 2, "G903".into())).unwrap();
+        assert_eq!((p.vendor, p.product, p.interface, p.protocol), (0x046d, 0xc091, 2, (4, 2)));
+        assert!(p.rgb_effects && !p.per_key && p.zones.is_empty() && p.layout.is_none());
+        assert_eq!((p.features.len(), p.features[6]), (11, (7, 0x8071, 0, 0)));
+        let lines = p.lighting.join("\n");
+        for want in [
+            "0x8071 info: ff 00 02 00 0b 00 04 00",
+            "0x8071 cluster 0: 00 00 00 01 04 07 00 00",
+            "0x8071 cluster 1 effect 2: 01 02 00 03 00 00 00 00 00 00",
+            "0x8071 nv config 0x0008: 00 00 08 01 07 00 00 00 00 00",
+            "0x8100 onboard mode: 01 00 00 00",
+        ] {
+            assert!(lines.contains(want), "{want} missing from\n{lines}");
+        }
+        assert!(fake.requests(RGB_EFFECTS).iter().all(|(f, p)| !(*f == 3 && p[0] != 0)));
+    }
+
+    #[test]
+    fn probe_reads_the_g316_zones() {
+        let (io, _fake) = fake::transport(fake::g316(), 0xFF);
+        let p = probe_on(io, Path::new("/dev/fake"), (0x046d, 0xc36b, 2, "G316".into())).unwrap();
+        assert!(p.per_key && p.rgb_effects);
+        assert_eq!((p.zones.len(), p.layout), (133, Some(1)));
+        assert!(p.lighting.iter().any(|l| l.starts_with("0x8071 nv config 0x0040")));
+    }
+
+    #[test]
+    fn probe_reads_an_older_colour_led_device() {
+        // No feature set and no 0x8071: 0x8070 colour LED effects only.
+        let spec = fake::Spec { features: vec![0x0000, 0x0003, 0x8070], clusters: vec![], nv: vec![], ext_caps: 0, zones: vec![] };
+        let (io, _fake) = fake::transport(spec, 0xFF);
+        let p = probe_on(io, Path::new("/dev/fake"), (0x046d, 0xc33f, 1, "Old".into())).unwrap();
+        assert!(p.features.is_empty() && !p.rgb_effects && !p.per_key && p.zones.is_empty());
+        assert_eq!(
+            p.lighting,
+            [
+                "0x8070 info: 01 00 00 00 00 00 00 00",
+                "0x8070 zone 0: 00 00 01 02 00 00 00 00",
+                "0x8070 zone 0 effect 0: 00 00 00 01 00 00 00 00 00 00",
+                "0x8070 zone 0 effect 1: 00 01 00 02 00 00 00 00 00 00",
+            ]
+        );
+    }
+
+    #[test]
+    fn probe_notes_a_refused_nv_read_and_goes_on() {
+        let (io, fake) = fake::transport(fake::g903(), 0xFF);
+        fake.state().refuse = Some(Box::new(|feature, function, _| ((feature, function) == (RGB_EFFECTS, 3)).then_some(2)));
+        let p = probe_on(io, Path::new("/dev/fake"), (0x046d, 0xc091, 2, "G903".into())).unwrap();
+        let refused = "0x8071 nv config 0x0001: keyboard rejected feature 0x8071 function 3 with HID++ error 0x02";
+        assert!(p.lighting.iter().any(|l| l == refused), "{:?}", p.lighting);
+        assert!(p.lighting.last().unwrap().starts_with("0x8100 onboard mode"));
+    }
+
+    #[test]
+    fn opening_a_path_checks_its_sysfs_identity_first() {
+        // The scratch sysfs makes /dev/null a G316, which then reads as unplugged;
+        // /dev/zero has no sysfs identity at all.
+        assert!(matches!(probe(Path::new("/dev/null")), Err(Error::Gone(_))));
+        assert!(matches!(probe(Path::new("/dev/zero")), Err(Error::WrongDevice(_))));
+        let g316 = crate::layout::find("g316-x-98").unwrap();
+        assert!(matches!(Keyboard::open(Path::new("/dev/null"), g316), Err(Error::Gone(_))));
+        assert!(matches!(Keyboard::find(Some(Path::new("/dev/null"))), Err(Error::Gone(_))));
+        assert!(matches!(Keyboard::find(Some(Path::new("/nonexistent/hidraw9"))), Err(Error::Access(..))));
+    }
+
+    #[test]
+    fn writes_wait_out_busy_but_not_forever() {
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        let mut busy = 3;
+        fake.state().refuse = Some(Box::new(move |feature, function, _| {
+            let refuse = (feature, function) == (PER_KEY, 7) && busy > 0;
+            busy -= usize::from(refuse);
+            refuse.then_some(BUSY)
+        }));
+        kb.send_frame(&[(4, [1, 2, 3])]).unwrap();
+        assert_eq!(fake.requests(PER_KEY).iter().filter(|r| r.0 == 7).count(), 4, "three BUSY answers, then the frame");
+        fake.state().refuse = Some(Box::new(|feature, function, _| ((feature, function) == (PER_KEY, 7)).then_some(BUSY)));
+        let t = Instant::now();
+        assert!(matches!(kb.send_frame(&[(4, [1, 2, 3])]), Err(Error::Busy(_))));
+        assert!(t.elapsed() >= BUSY_BUDGET);
+    }
+
+    #[test]
+    fn odd_replies_are_errors() {
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        fake.state().mangle = Some(|feature, function, r| {
+            if (feature, function) == (PER_KEY, 0) {
+                r[1] ^= 1; // another page than asked for
+            }
+        });
+        assert!(matches!(kb.zones(), Err(Error::Reply(_, why)) if why == "page 1"));
+        fake.state().mangle = Some(|feature, function, r| {
+            if (feature, function) == (PER_KEY, 1) {
+                r[0] ^= 1; // another zone than sent
+            }
+        });
+        assert!(matches!(kb.send_frame(&[(4, [1, 2, 3])]), Err(Error::Reply(_, why)) if why.starts_with("echoed [05")));
+        let mut spec = fake::g903();
+        spec.clusters[1].2.retain(|&id| id != STATIC);
+        let (mut mouse, _fake) = fake::keyboard("g903-hero", spec);
+        assert!(matches!(mouse.static_effects(), Err(Error::Reply(_, why)) if why == "cluster 1 has no Static effect"));
+    }
+
+    #[test]
+    fn feature_names_and_rates() {
+        assert_eq!((feature_name(0x8071), feature_name(0x8081), feature_name(0x1234)), ("RgbEffects", "PerKeyLightingV2", ""));
+        assert_eq!(RATES_HZ[3], 1000);
+        assert_eq!(RATES_HZ[6], 8000);
+    }
 }

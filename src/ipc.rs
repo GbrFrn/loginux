@@ -113,6 +113,8 @@ pub enum Reply {
 
 /// $XDG_RUNTIME_DIR/loginux, created private to this user.
 pub fn runtime_dir() -> Result<PathBuf, String> {
+    #[cfg(test)]
+    crate::testenv::init();
     let base = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
@@ -173,6 +175,22 @@ pub fn request(req: &Request) -> Result<Status, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    use std::thread;
+
+    fn status() -> Status {
+        Status {
+            device: Device::Missing,
+            control: Control::Onboard,
+            active: Some("Wave".into()),
+            message: None,
+            pid: 7,
+            hosted: false,
+            controls: None,
+            rate_change: None,
+        }
+    }
 
     #[test]
     fn preview_with_zone_keys_round_trips() {
@@ -183,5 +201,83 @@ mod tests {
             Request::Preview { profile: Some(q) } => assert_eq!(q, p),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn every_request_round_trips() {
+        for req in [
+            Request::Status,
+            Request::Use { profile: Some("Wave".into()) },
+            Request::Use { profile: None },
+            Request::Preview { profile: None },
+            Request::Check { zone: Some(38) },
+            Request::TakeOver,
+            Request::SetReportRate { hz: 8000 },
+        ] {
+            let line = serde_json::to_string(&req).unwrap();
+            let back: Request = serde_json::from_str(&line).unwrap();
+            assert_eq!(serde_json::to_string(&back).unwrap(), line);
+        }
+        assert_eq!(serde_json::to_string(&Request::Use { profile: None }).unwrap(), r#"{"use":{"profile":null}}"#);
+    }
+
+    #[test]
+    fn a_status_from_an_older_engine_still_parses() {
+        let old = r#"{"device":{"state":"connected","keyboard":"g316-x-98","name":"G316","path":"/dev/hidraw2","protocol":"4.2","layout":1,"zones":[38]},
+                      "control":{"state":"profile","name":"Test"},"active":"Test","message":null,"pid":1,"hosted":false}"#;
+        let s: Status = serde_json::from_str(old).unwrap();
+        assert!(matches!(s.device, Device::Connected { ref effects, .. } if effects.is_empty()));
+        assert!(s.controls.is_none() && s.rate_change.is_none());
+        let reply = serde_json::to_string(&Reply::Err("no".into())).unwrap();
+        assert!(matches!(serde_json::from_str::<Reply>(&reply).unwrap(), Reply::Err(e) if e == "no"));
+    }
+
+    #[test]
+    fn errors_print_their_message() {
+        assert_eq!(Error::Unreachable("down".into()).to_string(), "down");
+        assert_eq!(String::from(Error::Refused("no".into())), "no");
+    }
+
+    #[test]
+    fn the_runtime_folder_is_private() {
+        let root = crate::testenv::init();
+        let dir = runtime_dir().unwrap();
+        assert_eq!(dir, root.join("run/loginux"));
+        assert_eq!(fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(socket_path().unwrap(), dir.join("sock"));
+    }
+
+    /// Answers one connection on the engine socket with `reply`, returning the request line.
+    fn serve_once(reply: &'static str) -> thread::JoinHandle<String> {
+        let path = socket_path().unwrap();
+        let _ = fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).unwrap();
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(&stream).read_line(&mut line).unwrap();
+            (&stream).write_all(reply.as_bytes()).unwrap();
+            line
+        })
+    }
+
+    #[test]
+    fn requests_over_the_socket() {
+        let _serial = crate::testenv::serial();
+        let ok = format!("{}\n", serde_json::to_string(&Reply::Ok(status())).unwrap()).leak();
+        let server = serve_once(ok);
+        assert_eq!(request(&Request::Status).unwrap().pid, 7);
+        assert_eq!(server.join().unwrap(), "\"status\"\n");
+
+        let server = serve_once("{\"err\":\"refused here\"}\n");
+        assert!(matches!(request(&Request::TakeOver), Err(Error::Refused(e)) if e == "refused here"));
+        server.join().unwrap();
+
+        let server = serve_once("garbage\n");
+        assert!(matches!(request(&Request::Status), Err(Error::Unreachable(e)) if e.contains("bad reply")));
+        server.join().unwrap();
+
+        fs::remove_file(socket_path().unwrap()).unwrap();
+        assert!(matches!(request(&Request::Status), Err(Error::Unreachable(e)) if e.contains("no loginux engine")));
     }
 }

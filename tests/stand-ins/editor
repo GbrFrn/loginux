@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stand-in for the editor that Loginux's tray opens, in its tests: it stays
+# open until the test kills it.
+exec sleep 30

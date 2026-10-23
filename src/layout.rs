@@ -267,6 +267,8 @@ pub fn parse_id(text: &str) -> Option<u8> {
 pub fn models() -> &'static [Model] {
     static MODELS: OnceLock<Vec<Model>> = OnceLock::new();
     MODELS.get_or_init(|| {
+        #[cfg(test)]
+        crate::testenv::init();
         let mut models: Vec<Model> =
             BUILT_IN.iter().map(|(id, text)| Model::parse(id, text).expect("built-in keyboard definition")).collect();
         let dir = crate::profile::config_dir().join("devices");
@@ -295,6 +297,9 @@ pub fn find(id: &str) -> Option<&'static Model> {
 pub fn current() -> &'static Model {
     static CURRENT: OnceLock<&'static Model> = OnceLock::new();
     CURRENT.get_or_init(|| {
+        if cfg!(test) {
+            return &models()[0]; // tests rewrite config.toml as they go; all of them see the first built-in
+        }
         crate::profile::chosen_keyboard()
             .and_then(|id| find(&id))
             .or_else(|| models().iter().find(|m| crate::hidpp::present(m)))
@@ -306,13 +311,84 @@ pub fn current() -> &'static Model {
 mod tests {
     use super::*;
 
+    const BASE: &str = "name = \"T\"\nprotocol = \"hidpp20\"\nvendor = 1\nproduct = 2\ninterface = 0\nboard = [4, 2]\n";
+
+    fn def(extra: &str) -> Result<Model, String> {
+        Model::parse("t", &format!("{BASE}{extra}"))
+    }
+
     #[test]
     fn built_in_g316() {
-        let m = &models()[0];
+        crate::testenv::init();
+        let m = find("g316-x-98").unwrap();
         assert_eq!((m.zones.len(), m.ids(Kind::Key).len(), m.unknown().len()), (133, 95, 8));
         assert_eq!(m.named("esc").map(|z| z.id), Some(38));
         assert_eq!(m.named("bar1").map(|z| (z.id, z.group.as_str())), Some((160, "bar")));
         assert_eq!(m.named("bar30").map(|z| z.id), Some(221));
-        assert!(Model::parse("x", "name='x'\nprotocol='other'\nvendor=1\nproduct=1\ninterface=0\nboard=[1,1]\nkeys=[]").is_err());
+        assert_eq!(m.groups(), ["keys", "bar"]);
+        assert!(m.per_key && m.device_index == 0xFF);
+    }
+
+    #[test]
+    fn built_in_g903_has_only_the_logo() {
+        crate::testenv::init();
+        let m = find("g903-hero").unwrap();
+        assert!(!m.per_key);
+        assert_eq!(m.zones.iter().map(|z| (z.id, z.name.as_str(), z.group.as_str())).collect::<Vec<_>>(), [(1, "logo", "lights")]);
+        assert_eq!(m.groups(), ["lights"]);
+        assert_eq!(m.zone(0).map(|z| z.id), None, "the DPI indicator is left out");
+    }
+
+    #[test]
+    fn user_definitions_load_from_the_config_folder() {
+        crate::testenv::init();
+        let pad = find("test-pad").expect("written by testenv");
+        assert_eq!((pad.name.as_str(), pad.product, pad.per_key), ("Test Pad", 0xffff, false));
+        assert!(find("broken").is_none(), "a broken file is skipped");
+        assert!(find("notes").is_none(), "only .toml files are read");
+        assert!(models().iter().any(|m| m.id == current().id));
+    }
+
+    #[test]
+    fn definitions_explain_their_mistakes() {
+        let key = |name: &str, zone: u8| format!("{{ name = \"{name}\", zone = {zone}, at = [0, 0] }}");
+        assert!(def(&format!("keys = [{}]", key("a", 1))).unwrap().per_key);
+        for (extra, says) in [
+            ("keys = []\nprotocol2 = 1".to_string(), "unknown field"),
+            ("lighting = \"rgb\"".to_string(), "is not \"per-key\" or \"clusters\""),
+            (format!("lighting = \"clusters\"\nunknown = [3]\nlights = [{}]", key("l", 0)), "has only `keys` and `lights`"),
+            (format!("keys = [{}, {}]", key("a", 1), key("b", 1)), "zone 1 is listed twice"),
+            (format!("keys = [{}]", key("a", 255)), "zone 255"),
+            (format!("keys = [{}]", key("Esc", 1)), "invalid name"),
+            (format!("keys = [{}]", key("base", 1)), "invalid name"),
+            (format!("keys = [{}, {}]", key("a", 1), key("a", 2)), "duplicate"),
+            ("[[strip]]\nname = \"keys\"\ntitle = \"K\"\nrect = [0, 0, 1, 1]\nzones = [5]".to_string(), "cannot name a strip"),
+        ] {
+            let e = def(&extra).err().unwrap_or_default();
+            assert!(e.contains(says), "{extra:?} gave {e:?}");
+        }
+        let other = Model::parse("x", &BASE.replace("hidpp20", "other")).err().expect("rejected");
+        assert!(other.contains("not supported"));
+    }
+
+    #[test]
+    fn strips_name_their_segments_in_order() {
+        let m = def("unknown = [9]\n[[strip]]\nname = \"glow\"\ntitle = \"Glow\"\nrect = [0, 0, 4, 1]\nzones = [5, 6, 7]").unwrap();
+        assert_eq!(m.named("glow2").map(|z| (z.id, z.kind)), Some((6, Kind::Strip)));
+        assert_eq!(m.strips[0].zones, [5, 6, 7]);
+        assert_eq!(m.unknown(), [9]);
+        assert_eq!(m.groups(), ["glow"], "unknown zones are not a group");
+    }
+
+    #[test]
+    fn names_ids_and_hints() {
+        crate::testenv::init();
+        let m = find("g316-x-98").unwrap();
+        assert!(m.why_not("shift").contains("leftshift or rightshift"));
+        assert!(m.why_not("escape").contains("use esc"));
+        assert!(m.why_not("nope").contains("not a key on the Logitech G316 X 98"));
+        assert_eq!((parse_id("154"), parse_id("0x9a")), (Some(154), Some(154)));
+        assert_eq!((parse_id("0xzz"), parse_id("256"), parse_id("x")), (None, None, None));
+        assert!(find("nope").is_none());
     }
 }

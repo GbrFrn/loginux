@@ -3,12 +3,16 @@
 mod device;
 mod effects;
 mod engine;
+#[cfg(test)]
+mod fake;
 mod hidpp;
 mod icon;
 mod ipc;
 mod layout;
 mod pixelfont;
 mod profile;
+#[cfg(test)]
+mod testenv;
 mod tray;
 mod ui;
 
@@ -52,39 +56,46 @@ Profiles are ~/.config/loginux/profiles/NAME.toml. Nothing is written to the key
 flash, and unplugging the keyboard always restores its onboard lighting.
 ";
 
+/// How long `loginux rate` waits for the engine to confirm a change, and for a
+/// keyboard it changed itself to reconnect after a pause. Tests wait less.
+const CONFIRM: Duration = if cfg!(test) { Duration::from_millis(600) } else { Duration::from_secs(30) };
+const RECONNECT: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(20) };
+const PAUSE: Duration = if cfg!(test) { Duration::from_millis(10) } else { Duration::from_secs(1) };
+
 fn main() -> ExitCode {
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|a| a == "-h" || a == "--help") {
-        print!("{USAGE}");
-        return ExitCode::SUCCESS;
-    }
-    let result = take_value(&mut args, "--device").and_then(|device| {
-        let device = device.map(PathBuf::from);
-        let command = if args.is_empty() { "ui".to_string() } else { args.remove(0) };
-        if matches!(command.as_str(), "zones" | "status" | "probe") {
-            // SAFETY: restores the default action before any thread exists; `loginux zones | head` then just ends.
-            unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
-        }
-        match command.as_str() {
-            "ui" => no_more(&args).and_then(|_| ui::run(device)),
-            "run" => run(device, &mut args),
-            "status" => no_more(&args).and_then(|_| status(device)),
-            "zones" => no_more(&args).map(|_| zones()),
-            "use" => choose(&args),
-            "apply" | "paint" => paint(device, &command, &mut args),
-            "release" => no_more(&args).and_then(|_| release(device)),
-            "probe" => no_more(&args).and_then(|_| probe(device)),
-            "rate" => rate(device, &args),
-            "effect" => effect(device, &mut args),
-            other => Err(format!("unknown command {other:?}\n\n{USAGE}")),
-        }
-    });
-    match result {
+    match cli(std::env::args().skip(1).collect()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("loginux: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn cli(mut args: Vec<String>) -> Result<(), String> {
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        print!("{USAGE}");
+        return Ok(());
+    }
+    let device = take_value(&mut args, "--device")?.map(PathBuf::from);
+    let command = if args.is_empty() { "ui".to_string() } else { args.remove(0) };
+    // Not in tests, where a closed pipe must not end the whole run.
+    if matches!(command.as_str(), "zones" | "status" | "probe") && !cfg!(test) {
+        // SAFETY: restores the default action before any thread exists; `loginux zones | head` then just ends.
+        unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+    }
+    match command.as_str() {
+        "ui" => no_more(&args).and_then(|_| ui::run(device)),
+        "run" => run(device, &mut args),
+        "status" => no_more(&args).and_then(|_| status(device)),
+        "zones" => no_more(&args).map(|_| zones()),
+        "use" => choose(&args),
+        "apply" | "paint" => paint(device, &command, &mut args),
+        "release" => no_more(&args).and_then(|_| release(device)),
+        "probe" => no_more(&args).and_then(|_| probe(device)),
+        "rate" => rate(device, &args),
+        "effect" => effect(device, &mut args),
+        other => Err(format!("unknown command {other:?}\n\n{USAGE}")),
     }
 }
 
@@ -125,12 +136,7 @@ fn engine_busy() -> String {
 }
 
 fn open(device: Option<PathBuf>) -> Result<Keyboard, String> {
-    let found = match device {
-        Some(path) => hidpp::identify(&path, layout::models()).map(|m| (path, m)),
-        None => hidpp::find(layout::models()),
-    };
-    let (path, model) = found.map_err(|e| e.to_string())?;
-    Keyboard::open(&path, model).map_err(|e| e.to_string())
+    Keyboard::find(device.as_deref()).map_err(|e| e.to_string())
 }
 
 fn run(device: Option<PathBuf>, args: &mut Vec<String>) -> Result<(), String> {
@@ -459,7 +465,7 @@ fn rate(device: Option<PathBuf>, args: &[String]) -> Result<(), String> {
             return Ok(());
         };
         ipc::request(&Request::SetReportRate { hz })?;
-        let end = Instant::now() + Duration::from_secs(30);
+        let end = Instant::now() + CONFIRM;
         while Instant::now() < end {
             match ipc::request(&Request::Status).map(|s| s.rate_change) {
                 Ok(Some(RateChange::Done { hz })) => {
@@ -470,7 +476,7 @@ fn rate(device: Option<PathBuf>, args: &[String]) -> Result<(), String> {
                 _ => sleep(Duration::from_millis(250)),
             }
         }
-        return Err("the engine did not confirm the change within 30 s; `loginux status` shows its state".into());
+        return Err(format!("the engine did not confirm the change within {} s; `loginux status` shows its state", CONFIRM.as_secs()));
     }
     // No engine: this process owns the keyboard for the change.
     let Some(_lock) = engine::lock(false)? else { return Err(engine_busy()) };
@@ -498,8 +504,8 @@ fn rate(device: Option<PathBuf>, args: &[String]) -> Result<(), String> {
     }
     drop(kb);
     println!("sent {hz} Hz; waiting for the keyboard to reconnect");
-    sleep(Duration::from_secs(1));
-    let end = Instant::now() + Duration::from_secs(20);
+    sleep(PAUSE);
+    let end = Instant::now() + RECONNECT;
     while Instant::now() < end {
         if let Ok(mut kb) = open(device.clone()) {
             let (_, rates) = engine::read_controls(&mut kb).map_err(e)?;
@@ -514,7 +520,7 @@ fn rate(device: Option<PathBuf>, args: &[String]) -> Result<(), String> {
         }
         sleep(Duration::from_millis(250));
     }
-    Err("the keyboard did not come back within 20 s; replug it, then run `loginux rate`".into())
+    Err(format!("the keyboard did not come back within {} s; replug it, then run `loginux rate`", RECONNECT.as_secs()))
 }
 
 /// `loginux effect 0=wave logo=breathe,color=ff0000 --hold 10`: built-in effects
@@ -570,4 +576,349 @@ fn effect(device: Option<PathBuf>, args: &mut Vec<String>) -> Result<(), String>
     let after = engine::give_back(&mut kb, held.restore).map_err(e)?;
     println!("lighting handed back to the device (software control now {:02x} {:02x})", after.0, after.1);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fake;
+    use crate::ipc::Reply;
+    use crate::testenv::{self, stand_in};
+
+    fn args(text: &str) -> Vec<String> {
+        text.split_whitespace().map(String::from).collect()
+    }
+
+    /// One command line, as `main` runs it. Never `ui`, which opens a window.
+    fn run(text: &str) -> Result<(), String> {
+        cli(args(text))
+    }
+
+    /// An engine's answer, for a stand-in engine.
+    fn reply(controls: Option<Controls>, rate_change: Option<RateChange>) -> Reply {
+        Reply::Ok(Status {
+            device: Device::Missing,
+            control: Control::Onboard,
+            active: None,
+            message: None,
+            pid: 7,
+            hosted: false,
+            controls,
+            rate_change,
+        })
+    }
+
+    fn rates() -> Option<Controls> {
+        Some(Controls { report_rate: Some(1000), report_rates: vec![1000, 2000], ..Controls::default() })
+    }
+
+    fn busy(text: &str) {
+        let held = engine::lock(false).unwrap().expect("free");
+        let error = run(text).unwrap_err();
+        assert!(error.contains(&format!("another loginux (pid {})", std::process::id())), "{text}: {error}");
+        drop(held);
+    }
+
+    fn forget_claims() {
+        for id in ["g316-x-98", "g903-hero"] {
+            let _ = std::fs::remove_file(ipc::runtime_dir().unwrap().join(format!("claim-{id}")));
+        }
+    }
+
+    #[test]
+    fn the_command_line_dispatches_and_refuses_strays() {
+        let _serial = testenv::serial();
+        run("--help").unwrap();
+        assert!(run("bogus").unwrap_err().starts_with("unknown command \"bogus\""));
+        assert!(run("status --device").unwrap_err().contains("needs a value"));
+        for stray in ["ui x", "run x", "status x", "zones x", "release x", "probe x"] {
+            assert!(run(stray).unwrap_err().contains("unexpected argument \"x\""), "{stray}");
+        }
+        assert!(run("run --refresh soon").unwrap_err().contains("not a number of seconds"));
+        run("zones").unwrap();
+    }
+
+    #[test]
+    fn status_comes_from_the_engine_or_the_keyboard() {
+        let _serial = testenv::serial();
+        let engine = stand_in(vec![reply(None, None)]);
+        run("status").unwrap();
+        assert!(matches!(engine.join().unwrap()[..], [Request::Status]));
+        busy("status");
+        // Read from the keyboard: Esc unreported, and zone 250 unknown to the definition.
+        let mut spec = fake::g316();
+        spec.zones.retain(|&z| z != 38);
+        spec.zones.push(250);
+        let _kb = fake::plug("/dev/fake-status", "g316-x-98", spec);
+        run("status --device /dev/fake-status").unwrap();
+        assert!(run("status --device /dev/fake-status").unwrap_err().starts_with("cannot open"), "used up");
+    }
+
+    #[test]
+    fn use_chooses_through_the_engine_or_config() {
+        let _serial = testenv::serial();
+        assert!(run("use").unwrap_err().starts_with("usage"));
+        assert!(run("use T-absent").unwrap_err().contains("T-absent"));
+        let engine = stand_in(vec![reply(None, None), Reply::Err("refused for the test".into())]);
+        run("use Wave").unwrap();
+        assert_eq!(run("use --none").unwrap_err(), "refused for the test");
+        engine.join().unwrap();
+        // No engine: config.toml keeps the choice for the next one.
+        run("use Wave").unwrap();
+        assert_eq!(profile::active().as_deref(), Some("Wave"));
+        run("use --none").unwrap();
+        assert_eq!(profile::active(), None);
+    }
+
+    #[test]
+    fn paint_and_apply_claim_paint_and_hand_back() {
+        let _serial = testenv::serial();
+        forget_claims();
+        let kb = fake::plug("/dev/fake-paint", "g316-x-98", fake::g316());
+        run("paint esc=ff0000 --keep --device /dev/fake-paint").unwrap();
+        {
+            let st = kb.state();
+            assert_eq!((st.sw, st.shown[&38]), ((1, 0), [255, 0, 0]), "kept");
+        }
+        let mut green = Profile::default();
+        green.zones.insert(38, [0, 255, 0]);
+        profile::save(layout::find("g316-x-98").unwrap(), "T-cli", &green).unwrap();
+        let kb = fake::plug("/dev/fake-apply", "g316-x-98", fake::g316());
+        run("apply T-cli --hold 0.05 --device /dev/fake-apply").unwrap();
+        {
+            let st = kb.state();
+            assert_eq!((st.sw, st.shown[&38]), ((0, 0), [0, 255, 0]), "shown, then handed back");
+        }
+        profile::delete("T-cli").unwrap();
+        assert!(run("paint esc=ff0000 --keep --hold 1").unwrap_err().contains("exclude"));
+        let _kb = fake::plug("/dev/fake-apply-usage", "g316-x-98", fake::g316());
+        assert!(run("apply --keep --device /dev/fake-apply-usage").unwrap_err().starts_with("usage"));
+        let kb = fake::plug("/dev/fake-paint-held", "g316-x-98", fake::g316());
+        kb.state().sw = (1, 5);
+        let error = run("paint esc=ff0000 --keep --device /dev/fake-paint-held").unwrap_err();
+        assert!(error.contains("another program holds the lighting (software control 01 05)"), "{error}");
+        let kb = fake::plug("/dev/fake-paint-refused", "g316-x-98", fake::g316());
+        kb.state().refuse = Some(Box::new(|feature, function, _| (feature == 0x8081 && function == 1).then_some(4)));
+        assert!(run("paint esc=ff0000 --hold 0 --device /dev/fake-paint-refused").unwrap_err().contains("HID++ error 0x04"));
+        assert_eq!(kb.state().sw, (0, 0), "handed back after the failed frame");
+        let kb = fake::plug("/dev/fake-paint-failing", "g316-x-98", fake::g316());
+        kb.state().refuse = Some(Box::new(|feature, function, _| ((feature, function) == (0x8071, 5)).then_some(4)));
+        assert!(run("paint esc=ff0000 --keep --device /dev/fake-paint-failing").unwrap_err().contains("HID++ error 0x04"));
+        busy("paint esc=ff0000 --keep");
+        forget_claims();
+        testenv::default_signals();
+    }
+
+    #[test]
+    fn effects_run_on_clusters_by_number_or_light_name() {
+        let _serial = testenv::serial();
+        forget_claims();
+        let mouse = fake::plug("/dev/fake-fx-logo", "g903-hero", fake::g903());
+        run("effect logo=breathe --keep --device /dev/fake-fx-logo").unwrap();
+        assert_eq!(mouse.state().effects[&1].0, 3, "breathe is effect 3 on the logo");
+        let mouse = fake::plug("/dev/fake-fx-hold", "g903-hero", fake::g903());
+        run("effect 1=cycle --hold 0.05 --device /dev/fake-fx-hold").unwrap();
+        assert_eq!(mouse.state().sw, (0, 0), "handed back");
+        assert!(run("effect").unwrap_err().starts_with("usage"));
+        assert!(run("effect 1=cycle --keep --hold 1").unwrap_err().contains("exclude"));
+        for (i, (arg, says)) in [
+            ("1", "is not CLUSTER=EFFECT"),
+            ("dpi=cycle", "is not a cluster number or a light of the Logitech G903 HERO"),
+            ("9=cycle", "the device has 2 clusters"),
+            ("1=sparkle", "sparkle"),
+            ("1=ripple", "no Ripple effect"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let path = format!("/dev/fake-fx-wrong{i}");
+            let _mouse = fake::plug(&path, "g903-hero", fake::g903());
+            let error = run(&format!("effect {arg} --keep --device {path}")).unwrap_err();
+            assert!(error.contains(says), "{arg}: {error}");
+        }
+        let _kb = fake::plug("/dev/fake-fx-keys", "g316-x-98", fake::g316());
+        assert!(run("effect esc=wave --keep --device /dev/fake-fx-keys").unwrap_err().contains("not a cluster number"));
+        let mouse = fake::plug("/dev/fake-fx-held", "g903-hero", fake::g903());
+        mouse.state().sw = (1, 5);
+        let error = run("effect 1=cycle --keep --device /dev/fake-fx-held").unwrap_err();
+        assert_eq!(error, "another program holds the lighting (software control 01 05)");
+        let mouse = fake::plug("/dev/fake-fx-failing", "g903-hero", fake::g903());
+        mouse.state().refuse = Some(Box::new(|feature, function, _| ((feature, function) == (0x8071, 5)).then_some(4)));
+        assert!(run("effect 1=cycle --keep --device /dev/fake-fx-failing").unwrap_err().contains("HID++ error 0x04"));
+        let mouse = fake::plug("/dev/fake-fx-refused", "g903-hero", fake::g903());
+        mouse.state().refuse = Some(Box::new(|feature, function, _| ((feature, function) == (0x8071, 1)).then_some(4)));
+        assert!(run("effect 1=cycle --hold 0 --device /dev/fake-fx-refused").unwrap_err().contains("HID++ error 0x04"));
+        assert_eq!(mouse.state().sw, (0, 0), "handed back after the refused effect");
+        busy("effect 1=cycle --keep");
+        forget_claims();
+        testenv::default_signals();
+    }
+
+    #[test]
+    fn release_goes_through_the_engine_or_straight_to_the_keyboard() {
+        let _serial = testenv::serial();
+        let engine = stand_in(vec![reply(None, None)]);
+        run("release").unwrap();
+        assert!(matches!(engine.join().unwrap()[..], [Request::Use { profile: None }]));
+        let kb = fake::plug("/dev/fake-release", "g316-x-98", fake::g316());
+        kb.state().sw = (1, 0);
+        run("release --device /dev/fake-release").unwrap();
+        assert_eq!(kb.state().sw, (0, 0));
+        busy("release");
+    }
+
+    #[test]
+    fn probe_prints_a_starting_definition() {
+        let _serial = testenv::serial();
+        assert!(run("probe").unwrap_err().starts_with("usage"));
+        // /dev/null passes for a G316 in tests, so the lock is taken; then it reads as unplugged.
+        assert!(run("probe --device /dev/null").unwrap_err().contains("disconnected"));
+        busy("probe --device /dev/null");
+        let _mouse = fake::plug("/dev/fake-probe-mouse", "g903-hero", fake::g903());
+        run("probe --device /dev/fake-probe-mouse").unwrap(); // no per-key lighting: no definition
+        let _kb = fake::plug("/dev/fake-probe-keys", "g316-x-98", fake::g316());
+        run("probe --device /dev/fake-probe-keys").unwrap();
+    }
+
+    #[test]
+    fn rate_through_the_engine() {
+        let _serial = testenv::serial();
+        let engine = stand_in(vec![reply(rates(), None), reply(None, None)]);
+        run("rate").unwrap();
+        run("rate").unwrap(); // not connected
+        engine.join().unwrap();
+        let waiting = Some(RateChange::Waiting { hz: 2000 });
+        let engine = stand_in(vec![reply(rates(), None), reply(rates(), waiting.clone()), reply(rates(), waiting), reply(rates(), Some(RateChange::Done { hz: 2000 }))]);
+        run("rate 2000Hz").unwrap();
+        assert!(matches!(engine.join().unwrap()[1], Request::SetReportRate { hz: 2000 }));
+        let failed = Some(RateChange::Failed { hz: 2000, error: "the keyboard reports 1000 Hz".into() });
+        let engine = stand_in(vec![reply(rates(), None), reply(rates(), None), reply(rates(), failed)]);
+        assert_eq!(run("rate 2000").unwrap_err(), "report-rate change: the keyboard reports 1000 Hz");
+        engine.join().unwrap();
+        let engine = stand_in(vec![reply(rates(), None), Reply::Err("one change at a time".into())]);
+        assert_eq!(run("rate 2000").unwrap_err(), "one change at a time");
+        engine.join().unwrap();
+        let engine = stand_in(vec![reply(rates(), None), reply(rates(), None)]);
+        assert!(run("rate 2000").unwrap_err().contains("did not confirm"), "the engine went quiet");
+        engine.join().unwrap();
+        assert!(run("rate fast").unwrap_err().contains("not a rate in Hz"));
+        assert!(run("rate 1 2").unwrap_err().starts_with("usage"));
+    }
+
+    #[test]
+    fn rate_on_the_keyboard_itself() {
+        let _serial = testenv::serial();
+        let at = "/dev/fake-rate";
+        let rate = |hz: &str| run(&format!("rate {hz} --device {at}"));
+        let plug = |id: &str| fake::plug(at, id, if id == "g903-hero" { fake::g903() } else { fake::g316() });
+        let _kb = plug("g316-x-98");
+        rate("").unwrap();
+        let _kb = plug("g316-x-98");
+        rate("1000").unwrap(); // already
+        let _kb = plug("g316-x-98");
+        assert!(rate("1234").unwrap_err().contains("not a rate this keyboard reports"));
+        let _mouse = plug("g903-hero");
+        assert!(rate("1000").unwrap_err().contains("does not report a report rate"));
+        let kb = plug("g316-x-98");
+        kb.state().refuse_rate = Some((4, 2));
+        assert!(rate("2000").unwrap_err().contains("HID++ error 0x02"));
+        // Changed: the keyboard reconnects with the new rate, another one, none, or not at all.
+        let (_before, after) = (plug("g316-x-98"), plug("g316-x-98"));
+        after.state().rate = 4;
+        rate("2000").unwrap();
+        let (_before, _after) = (plug("g316-x-98"), plug("g316-x-98"));
+        assert!(rate("2000").unwrap_err().contains("reports rate index 3"));
+        let (_before, _after) = (plug("g316-x-98"), plug("g903-hero"));
+        assert!(rate("2000").unwrap_err().contains("did not report its rate"));
+        let _before = plug("g316-x-98");
+        assert!(rate("2000").unwrap_err().contains("did not come back"));
+        busy("rate");
+    }
+
+    #[test]
+    fn flags_values_and_leftovers() {
+        let mut a = args("--keep esc=ff0000 --hold 5");
+        assert!(take_flag(&mut a, "--keep"));
+        assert!(!take_flag(&mut a, "--keep"));
+        assert_eq!(take_value(&mut a, "--hold").unwrap().as_deref(), Some("5"));
+        assert_eq!(take_value(&mut a, "--hold").unwrap(), None);
+        assert!(no_more(&a).unwrap_err().contains("esc=ff0000"));
+        assert!(take_value(&mut args("--base"), "--base").unwrap_err().contains("needs a value"));
+        assert!(no_more(&[]).is_ok());
+        assert_eq!(seconds(None, 10.0).unwrap(), 10.0);
+        assert_eq!(seconds(Some("2.5".into()), 10.0).unwrap(), 2.5);
+        for bad in ["-1", "inf", "soon"] {
+            assert!(seconds(Some(bad.into()), 1.0).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn paint_arguments_become_a_profile() {
+        crate::testenv::init();
+        let m = layout::find("g316-x-98").unwrap();
+        let p = assignments(m, &mut args("esc=ff0000 bar1=00ff00 0x9a=0000ff --base 101010")).unwrap();
+        assert_eq!((p.zones[&38], p.zones[&160], p.zones[&154]), ([255, 0, 0], [0, 255, 0], [0, 0, 255]));
+        assert_eq!((p.base("keys"), p.base("bar")), ([0x10; 3], [0x10; 3]));
+        for (text, says) in [
+            ("", "usage"),
+            ("esc", "not ZONE=RRGGBB"),
+            ("shift=ffffff", "leftshift"),
+            ("250=ffffff", "zone 250 is not one"),
+            ("esc=ffffff 38=000000", "given twice"),
+            ("esc=nothex", "not a colour"),
+        ] {
+            assert!(assignments(m, &mut args(text)).unwrap_err().contains(says), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn status_text_names_the_device_and_the_lighting() {
+        let mut s = Status {
+            device: Device::Connected {
+                keyboard: "g316-x-98".into(),
+                name: "Logitech G316 X 98".into(),
+                path: "/dev/hidraw2".into(),
+                protocol: "4.2".into(),
+                layout: Some(1),
+                zones: vec![1, 2, 3],
+                effects: vec![],
+            },
+            control: Control::Profile { name: "Test".into() },
+            active: Some("Test".into()),
+            message: Some("hello".into()),
+            pid: 42,
+            hosted: true,
+            controls: Some(Controls { brightness: Some([100, 100]), report_rate: Some(1000), report_rates: vec![1000, 8000], game_mode: Some(true) }),
+            rate_change: Some(RateChange::Failed { hz: 8000, error: "refused".into() }),
+        };
+        let text = describe(&s);
+        for want in [
+            "keyboard: Logitech G316 X 98 on /dev/hidraw2, HID++ 4.2, layout code 0x01, 3 zones",
+            "lighting: showing profile \"Test\"",
+            "engine: pid 42 inside an editor window",
+            "brightness: 100 of 100 (read only)",
+            "report rate: 1000 Hz; supports 1000, 8000",
+            "game mode: on (read only)",
+            "report-rate change to 8000 Hz failed: refused",
+            "last message: hello",
+        ] {
+            assert!(text.contains(want), "{want} missing from\n{text}");
+        }
+        for (device, control, want) in [
+            (Device::Missing, Control::Onboard, "not connected"),
+            (Device::NoAccess { error: "no access".into() }, Control::Waiting, "waiting for the keyboard"),
+            (Device::Failed { error: "boom".into() }, Control::Preview, "error: boom"),
+            (Device::Missing, Control::Check { zone: 9 }, "zone 9 lit"),
+            (Device::Missing, Control::Conflict { mode: 1, flags: 5 }, "software control 01 05"),
+        ] {
+            s.device = device;
+            s.control = control;
+            s.rate_change = Some(RateChange::Waiting { hz: 2000 });
+            let text = describe(&s);
+            assert!(text.contains(want) && text.contains("waiting for the keyboard to confirm 2000 Hz"), "{want}\n{text}");
+        }
+        assert!(controls_text(&Controls::default()).contains("report rate: not reported"));
+        s.rate_change = None;
+        assert!(!describe(&s).contains("report-rate change"));
+    }
 }

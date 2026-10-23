@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -236,6 +236,8 @@ struct Outbox {
 #[derive(Clone)]
 struct Link(Arc<(Mutex<Outbox>, Condvar)>);
 
+const POLL: Duration = if cfg!(test) { Duration::from_millis(100) } else { Duration::from_secs(1) };
+
 impl Link {
     fn start(ctx: egui::Context) -> Link {
         let link = Link(Arc::default());
@@ -246,7 +248,7 @@ impl Link {
                 let req = {
                     let mut out = lock.lock().expect("link lock");
                     if out.requests.is_empty() && out.preview.is_none() && !out.quit {
-                        out = wake.wait_timeout(out, Duration::from_secs(1)).expect("link lock").0;
+                        out = wake.wait_timeout(out, POLL).expect("link lock").0;
                     }
                     if out.quit {
                         return;
@@ -302,8 +304,25 @@ enum Service {
     Disabled,
 }
 
+static SYSTEMCTL: OnceLock<PathBuf> = OnceLock::new();
+
+/// `systemctl --user`. Tests get a stand-in script instead (`use_systemctl`), so
+/// no test asks, starts or stops the real service.
+fn systemctl() -> Command {
+    #[cfg(test)]
+    crate::testenv::init();
+    let mut cmd = Command::new(SYSTEMCTL.get_or_init(|| PathBuf::from("systemctl")));
+    cmd.arg("--user");
+    cmd
+}
+
+#[cfg(test)]
+pub fn use_systemctl(program: PathBuf) {
+    SYSTEMCTL.set(program).expect("the stand-in is chosen before any call");
+}
+
 fn service_state() -> Service {
-    let out = Command::new("systemctl").args(["--user", "is-enabled", "loginux.service"]).output();
+    let out = systemctl().args(["is-enabled", "loginux.service"]).output();
     match out.as_ref().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()) {
         Ok(s) if s.starts_with("enabled") || s == "linked" => Service::Enabled,
         Ok(s) if !s.is_empty() => Service::Disabled,
@@ -365,7 +384,7 @@ struct App {
     /// When this window asked systemd to start the service; no engine is hosted
     /// here while the service may still be starting.
     service_start: Option<Instant>,
-    status: Option<Result<Status, String>>,
+    status: Result<Status, String>,
     tab: Tab,
     names: Vec<String>,
     cache: BTreeMap<String, Profile>,
@@ -398,10 +417,9 @@ struct App {
 }
 
 impl App {
-    fn new(ctx: &egui::Context, device: Option<PathBuf>, hosted: Option<Hosted>) -> App {
+    fn new(ctx: &egui::Context, model: &'static Model, device: Option<PathBuf>, hosted: Option<Hosted>) -> App {
         let link = Link::start(ctx.clone());
         let service = Arc::new(Mutex::new(Service::Unknown));
-        let model = layout::current();
         let mut app = App {
             model,
             link,
@@ -409,7 +427,7 @@ impl App {
             device,
             host_tried: None,
             service_start: None,
-            status: Some(ipc::request(&Request::Status).map_err(String::from)),
+            status: ipc::request(&Request::Status).map_err(String::from),
             tab: Tab::Edit,
             names: vec![],
             cache: BTreeMap::new(),
@@ -466,7 +484,7 @@ impl App {
     fn systemctl(&self, args: &[&'static str]) {
         let (slot, link, args) = (self.service.clone(), self.link.clone(), args.to_vec());
         thread::spawn(move || {
-            let out = Command::new("systemctl").arg("--user").args(&args).arg("loginux.service").output();
+            let out = systemctl().args(&args).arg("loginux.service").output();
             if let Ok(o) = &out
                 && !o.status.success()
             {
@@ -517,7 +535,7 @@ impl App {
     }
 
     fn status(&self) -> Option<&Status> {
-        self.status.as_ref().and_then(|s| s.as_ref().ok())
+        self.status.as_ref().ok()
     }
 
     fn connected_zones(&self) -> Option<&[u8]> {
@@ -583,12 +601,12 @@ impl App {
         }
         let (status, errors) = self.link.take();
         if let Some(s) = status {
-            self.status = Some(s);
+            self.status = s;
         }
         if let Some(e) = errors.into_iter().last() {
             self.notice = Some((e, AMBER));
         }
-        let engine_down = matches!(self.status, Some(Err(_)));
+        let engine_down = self.status.is_err();
         // A new or restarted engine knows nothing of this window: send its wishes again.
         if !engine_down && !self.engine_up {
             self.sent = None;
@@ -606,7 +624,6 @@ impl App {
             && !service_starting
             && self.host_tried.is_none_or(|t| t.elapsed() > Duration::from_secs(2))
         {
-            self.host_tried = Some(Instant::now());
             let service = *self.service.lock().expect("service lock");
             // An enabled service that is not running (quit from the tray, say) is
             // started once, which brings the tray back; only a disabled or missing
@@ -614,12 +631,13 @@ impl App {
             if service == Service::Unknown {
                 return; // systemd has not answered yet
             }
+            self.host_tried = Some(Instant::now());
             if service == Service::Enabled && self.service_start.is_none() {
                 self.service_start = Some(Instant::now());
                 self.systemctl(&["start"]);
                 return;
             }
-            if let Some(Err(e)) = &self.status {
+            if let Err(e) = &self.status {
                 eprintln!("loginux: {e}; starting an engine in this window");
             }
             match Hosted::start(engine::Options { device: self.device.clone(), refresh: None }) {
@@ -734,9 +752,6 @@ impl App {
                     }
                 }
             }
-            if self.names.is_empty() {
-                body(ui, "No profiles yet. Create one, paint it, and save.", TEXT2, 13.0);
-            }
             ui.add_space(4.0);
             match self.new_name.as_mut() {
                 None => {
@@ -814,9 +829,8 @@ impl App {
 
     fn status_block(&mut self, ui: &mut Ui) {
         let (dev, dev_ink, detail) = match &self.status {
-            None => ("STARTING".to_string(), LABEL, String::new()),
-            Some(Err(e)) => ("NO ENGINE".to_string(), AMBER, e.clone()),
-            Some(Ok(s)) => match &s.device {
+            Err(e) => ("NO ENGINE".to_string(), AMBER, e.clone()),
+            Ok(s) => match &s.device {
                 Device::Connected { path, .. } => ("CONNECTED".to_string(), GREEN, format!("G316 X 98 on {path}")),
                 Device::Missing => ("NOT CONNECTED".to_string(), LABEL, "Plug the G316 X 98 in; loginux picks it up.".into()),
                 Device::NoAccess { error } => ("NO ACCESS".to_string(), AMBER, error.clone()),
@@ -831,7 +845,7 @@ impl App {
         if !detail.is_empty() {
             body(ui, detail, TEXT2, 12.0);
         }
-        let Some(Ok(s)) = &self.status else { return };
+        let Ok(s) = &self.status else { return };
         let lighting = match &s.control {
             Control::Onboard => "Onboard lighting: loginux is not painting.".to_string(),
             Control::Waiting => "Waiting for the keyboard.".to_string(),
@@ -1021,7 +1035,9 @@ impl App {
         let w = ui.available_width();
         let ppp = ui.pixels_per_point();
         let (sv_rect, sv) = ui.allocate_exact_size(vec2(w, 120.0), Sense::click_and_drag());
+        sv.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Slider, true, "saturation and brightness"));
         let (hue_rect, hue) = ui.allocate_exact_size(vec2(w, 16.0), Sense::click_and_drag());
+        hue.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Slider, true, "hue"));
         let p = ui.painter();
         let sv_rect = snap(sv_rect, ppp);
         let hue_rect = snap(hue_rect, ppp);
@@ -2043,6 +2059,7 @@ fn window_icon() -> egui::IconData {
     egui::IconData { rgba, width: side as u32, height: side as u32 }
 }
 
+// LCOV_EXCL_START: opens the native window, which tests cannot; App holds everything it shows.
 pub fn run(device: Option<PathBuf>) -> Result<(), String> {
     engine::install_signal_handlers();
     let hosted = match ipc::request(&Request::Status) {
@@ -2071,8 +2088,918 @@ pub fn run(device: Option<PathBuf>) -> Result<(), String> {
             if let Some(z) = zoom {
                 cc.egui_ctx.set_zoom_factor(z);
             }
-            Ok(Box::new(App::new(&cc.egui_ctx, device, hosted)))
+            Ok(Box::new(App::new(&cc.egui_ctx, layout::current(), device, hosted)))
         }),
     )
     .map_err(|e| e.to_string())
+}
+// LCOV_EXCL_STOP
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::App as _;
+    use egui::accesskit::Role;
+
+    fn g316() -> &'static Model {
+        crate::testenv::init();
+        layout::find("g316-x-98").unwrap()
+    }
+
+    #[test]
+    fn hsv_round_trips_the_primaries_and_greys() {
+        for c in [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [0, 255, 255], [255, 0, 255], [128, 128, 128], [0, 0, 0], [255, 46, 63]] {
+            assert_eq!(from_hsv(to_hsv(c)), c, "{c:?}");
+        }
+        assert_eq!(to_hsv([255, 0, 0]), [0.0, 1.0, 1.0]);
+        assert_eq!(to_hsv([0, 0, 0])[1], 0.0, "black has no saturation");
+    }
+
+    #[test]
+    fn legends_pick_ink_by_luminance() {
+        assert_eq!(ink_on([255, 255, 255]), GROUND);
+        assert_eq!(ink_on([0, 0, 64]), TEXT);
+        assert_eq!(rgb([1, 2, 3]), Color32::from_rgb(1, 2, 3));
+    }
+
+    #[test]
+    fn normalize_makes_the_commonest_colour_the_base() {
+        let m = g316();
+        let mut p = Profile::default();
+        for z in m.zones.iter().filter(|z| z.group == "keys") {
+            p.zones.insert(z.id, [5, 5, 5]);
+        }
+        p.zones.insert(38, [255, 0, 0]);
+        normalize(m, &mut p);
+        assert_eq!(p.base("keys"), [5, 5, 5]);
+        assert_eq!(p.zones.get(&38), Some(&[255, 0, 0]));
+        assert_eq!(p.zones.get(&39), None, "colours equal to the base are dropped");
+        assert_eq!(p.base("bar"), [0, 0, 0]);
+        let counts = colour_counts(m, &p, &[Kind::Key]);
+        assert_eq!(counts[0], ([5, 5, 5], 94));
+        assert_eq!(counts[1], ([255, 0, 0], 1));
+    }
+
+    #[test]
+    fn selections_read_as_names() {
+        let m = g316();
+        let pick = |ids: &[u8]| selection_names(m, &ids.iter().copied().collect());
+        assert_eq!(pick(&[]), "");
+        assert_eq!(pick(&[38]), "ESC");
+        assert_eq!(pick(&[160, 38, 154]), "ESC BAR1 154", "keys and strips by position, unknown zones last");
+        assert_eq!(pick(&[1, 2, 3, 4, 5, 6]), "6 ZONES");
+    }
+
+    #[test]
+    fn check_sets_and_labels_fit_the_device() {
+        let m = g316();
+        let sets = Set::all(m);
+        assert_eq!(sets.iter().map(|s| s.title(m)).collect::<Vec<_>>(), ["LIGHT BAR", "UNKNOWN ZONES", "ALL KEYS"]);
+        assert_eq!((Set::Unknown.zones(m).len(), Set::Keys.zones(m).len(), Set::Strip(0).zones(m).len()), (8, 95, 30));
+        let mouse = layout::find("g903-hero").unwrap();
+        let sets = Set::all(mouse);
+        assert_eq!(sets.iter().map(|s| s.title(mouse)).collect::<Vec<_>>(), ["ALL LIGHTS"], "no empty unknown set");
+        assert_eq!((colours_label(m), colours_label(mouse)), ("PER-KEY", "COLOURS"));
+        for k in fx::Kind::ALL {
+            assert!(effect_note(k).ends_with('.'));
+        }
+    }
+
+    /// One accessibility node: what a screen reader announces (a label, or a
+    /// text's value), and where.
+    struct Node {
+        label: String,
+        role: Role,
+        rect: Rect,
+        enabled: bool,
+    }
+
+    /// The editor without a window: frames run headless, and controls are found
+    /// and clicked by their accessibility labels, as a user would.
+    struct Window {
+        ctx: egui::Context,
+        app: App,
+        frame: eframe::Frame,
+        nodes: Vec<Node>,
+        events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+        /// The window manager asks to close before the next frame.
+        close: bool,
+        /// Viewport commands the editor sent, such as Close.
+        commands: Vec<egui::ViewportCommand>,
+    }
+
+    impl Window {
+        /// An editor for the G316 on `device`, which hosts an engine of its own
+        /// once it finds none answering.
+        fn on(device: Option<&str>) -> Window {
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            style(&ctx);
+            let app = App::new(&ctx, g316(), device.map(PathBuf::from), None);
+            let frame = eframe::Frame::_new_kittest();
+            Window { ctx, app, frame, nodes: vec![], events: vec![], modifiers: Default::default(), close: false, commands: vec![] }
+        }
+
+        /// An editor whose device does not exist, once it hosts its own engine.
+        fn open() -> Window {
+            Window::hosting(Some("/nonexistent/loginux-ui-test"))
+        }
+
+        fn hosting(device: Option<&str>) -> Window {
+            let mut w = Window::on(device);
+            w.until("the editor hosts an engine", |w| w.app.hosted.is_some() && w.app.status.is_ok());
+            w
+        }
+
+        fn run(&mut self, frames: usize) {
+            for _ in 0..frames {
+                let mut events = vec![egui::Event::ModifiersChanged(self.modifiers)];
+                events.append(&mut self.events);
+                let mut input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1360.0, 840.0))),
+                    events,
+                    ..Default::default()
+                };
+                if std::mem::take(&mut self.close) {
+                    input.viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+                }
+                let (app, frame) = (&mut self.app, &mut self.frame);
+                let mut out = self.ctx.run_ui(input, |ui| app.ui(ui, frame));
+                out.textures_delta.clear(); // nothing paints them
+                self.commands.extend(out.viewport_output.into_values().flat_map(|v| v.commands));
+                if let Some(update) = out.platform_output.accesskit_update {
+                    self.nodes = update
+                        .nodes
+                        .iter()
+                        .filter_map(|(_, n)| {
+                            let b = n.bounds()?;
+                            let rect = Rect::from_min_max(pos2(b.x0 as f32, b.y0 as f32), pos2(b.x1 as f32, b.y1 as f32));
+                            let label = n.label().or(n.value()).unwrap_or_default().to_string();
+                            Some(Node { label, role: n.role(), rect, enabled: !n.is_disabled() })
+                        })
+                        .collect();
+                }
+            }
+        }
+
+        /// Runs frames until `cond` holds, for up to 15 seconds.
+        fn until(&mut self, what: &str, cond: impl Fn(&Window) -> bool) {
+            let end = Instant::now() + Duration::from_secs(15);
+            while !cond(self) {
+                assert!(Instant::now() < end, "timed out waiting until {what}");
+                self.run(1);
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+
+        fn has(&self, label: &str) -> bool {
+            self.nodes.iter().any(|n| n.label == label)
+        }
+
+        fn enabled(&self, label: &str) -> bool {
+            self.nodes.iter().any(|n| n.label == label && n.enabled)
+        }
+
+        /// The leftmost enabled control with this label.
+        fn find(&self, label: &str) -> Rect {
+            self.nodes
+                .iter()
+                .filter(|n| n.label == label && n.enabled)
+                .map(|n| n.rect)
+                .min_by(|a, b| a.min.x.total_cmp(&b.min.x))
+                .unwrap_or_else(|| panic!("no enabled {label:?}; have {:?}", self.nodes.iter().map(|n| &n.label).collect::<Vec<_>>()))
+        }
+
+        /// The topmost control of `role` in the right column.
+        fn right(&self, role: Role) -> Rect {
+            self.nodes
+                .iter()
+                .filter(|n| n.role == role && n.rect.min.x > 1044.0)
+                .map(|n| n.rect)
+                .min_by(|a, b| a.min.y.total_cmp(&b.min.y))
+                .unwrap_or_else(|| panic!("no {role:?} in the right column"))
+        }
+
+        /// The centre of zone `id` on the board, from the board's place and the definition.
+        fn zone(&self, id: u8) -> Pos2 {
+            let board = self.find("keyboard map");
+            let unit = (board.width() - 20.0) / self.app.model.board[0];
+            let [x, y, w, h] = self.app.model.zone(id).expect("a zone of the definition").rect;
+            board.min + vec2(10.0 + (x + w / 2.0) * unit, 10.0 + (y + h / 2.0) * unit)
+        }
+
+        /// Clicks the leftmost enabled control with this label, as the window shows it now.
+        fn click(&mut self, label: &str) {
+            self.run(1);
+            let at = self.find(label).center();
+            self.click_at(at);
+        }
+
+        fn click_at(&mut self, pos: Pos2) {
+            let modifiers = self.modifiers;
+            let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
+            self.events = vec![egui::Event::PointerMoved(pos), button(true)];
+            self.run(1);
+            self.events = vec![button(false)];
+            self.run(2);
+        }
+
+        fn hover(&mut self, pos: Pos2) {
+            self.events = vec![egui::Event::PointerMoved(pos)];
+            self.run(2);
+        }
+
+        fn drag(&mut self, from: Pos2, to: Pos2) {
+            let modifiers = self.modifiers;
+            let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
+            self.events = vec![egui::Event::PointerMoved(from), button(from, true)];
+            self.run(1);
+            // A few points first, so the drag starts where it was pressed, as a hand's would.
+            for step in [(to - from).normalized() * 8.0, (to - from) * 0.5, to - from] {
+                self.events = vec![egui::Event::PointerMoved(from + step)];
+                self.run(1);
+            }
+            self.events = vec![button(to, false)];
+            self.run(2);
+        }
+
+        fn key(&mut self, key: Key) {
+            let modifiers = self.modifiers;
+            let event = |pressed| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+            self.events = vec![event(true), event(false)];
+            self.run(2);
+        }
+
+        fn type_text(&mut self, text: &str) {
+            self.events = vec![egui::Event::Text(text.into())];
+            self.run(2);
+        }
+    }
+
+    impl Drop for Window {
+        fn drop(&mut self) {
+            self.app.on_exit(None); // as eframe does when the window closes
+        }
+    }
+
+    fn scratch_profile(name: &str, esc: Rgb) {
+        let mut p = Profile::default();
+        p.bases.insert("keys".into(), [0x20, 0x20, 0x20]);
+        p.zones.insert(38, esc);
+        profile::save(g316(), name, &p).unwrap();
+    }
+
+    #[test]
+    fn create_paint_save_copy_and_switch_profiles_in_the_editor() {
+        let _serial = crate::testenv::serial();
+        let mut w = Window::open();
+        assert!(w.has("+ NEW PROFILE") && w.has("SERVICE NOT INSTALLED"));
+
+        // Create: the new profile starts as a copy of the open one and opens.
+        w.click("+ NEW PROFILE");
+        w.type_text("T ui one");
+        w.click("CREATE");
+        assert_eq!(w.app.open.as_deref(), Some("T ui one"));
+        assert!(profile::path("T ui one").unwrap().exists());
+        // With no profile chosen the editor opened the first preset, so the copy
+        // runs an effect; per-key colours come back with PER-KEY.
+        if w.app.work.effect.is_some() {
+            w.click("PER-KEY");
+        }
+        assert!(w.app.work.effect.is_none());
+
+        // Paint Esc red, save: the file holds it, and the window is clean again.
+        w.app.selection = [38].into_iter().collect();
+        w.app.paint_selection([255, 0, 0]);
+        w.run(2);
+        assert!(w.app.dirty() && w.enabled("SAVE"));
+        w.click("SAVE");
+        assert!(!w.app.dirty());
+        assert_eq!(profile::load(g316(), "T ui one").unwrap().zones.get(&38), Some(&[255, 0, 0]));
+
+        // A second profile copies the first; switching back opens it.
+        w.click("+ NEW PROFILE");
+        w.type_text("T ui two");
+        w.click("CREATE");
+        assert_eq!(profile::load(g316(), "T ui two").unwrap().zones.get(&38), Some(&[255, 0, 0]));
+        w.click("T ui one");
+        assert_eq!(w.app.open.as_deref(), Some("T ui one"));
+
+        // Use it: the hosted engine takes it as the profile to keep applied.
+        w.click("USE THIS PROFILE");
+        w.until("the engine reports the profile in use", |w| w.app.status().and_then(|s| s.active.as_deref()) == Some("T ui one"));
+        assert_eq!(profile::active().as_deref(), Some("T ui one"));
+        w.run(1);
+        assert!(!w.has("USE THIS PROFILE"), "an IN USE mark takes the button's place");
+
+        // Unsaved changes before switching ask first; discarding opens the other profile.
+        w.app.selection = [38].into_iter().collect(); // opening a profile clears the selection
+        w.app.paint_selection([0, 0, 255]);
+        w.run(1);
+        w.click("T ui two");
+        assert!(matches!(w.app.confirm, Some(Confirm::Switch(ref n)) if n == "T ui two"));
+        w.click("DISCARD AND OPEN");
+        assert_eq!((w.app.open.as_deref(), w.app.dirty()), (Some("T ui two"), false));
+
+        // Delete asks, KEEP IT keeps, DELETE removes the file.
+        w.click("DELETE");
+        assert!(matches!(w.app.confirm, Some(Confirm::Delete(_))));
+        w.click("KEEP IT");
+        assert!(w.app.confirm.is_none() && profile::path("T ui two").unwrap().exists());
+        w.click("DELETE");
+        w.click("DELETE"); // the confirm bar's button sits left of the column's
+        assert!(!profile::path("T ui two").unwrap().exists());
+        assert!(!w.has("T ui two"));
+
+        w.click("T ui one");
+        ok_use_none(&mut w);
+        profile::delete("T ui one").unwrap();
+    }
+
+    /// Hands the lighting back so later tests start with no profile chosen.
+    fn ok_use_none(w: &mut Window) {
+        w.app.link.send(Request::Use { profile: None });
+        w.until("the engine drops the profile", |w| w.app.status().is_some_and(|s| s.active.is_none()));
+    }
+
+    #[test]
+    fn presets_open_read_only_and_save_as_new() {
+        let _serial = crate::testenv::serial();
+        let mut w = Window::open();
+        w.click("Wave");
+        assert_eq!(w.app.work.effect.as_ref().map(|e| e.kind), Some(fx::Kind::Wave));
+        assert!(w.app.built_in.contains("Wave") && w.has("SAVE AS NEW") && !w.enabled("SAVE AS NEW") && !w.has("DELETE"));
+        assert!(!w.has("RIGHT") && w.has("LEFT") && w.has("CENTRE OUT"), "the current direction is a mark, the rest buttons");
+        w.click("LEFT");
+        assert_eq!(w.app.work.effect.as_ref().map(|e| e.direction), Some(6));
+        assert!(w.app.dirty() && !w.has("USE THIS PROFILE"), "a changed preset is saved under its own name first");
+        w.click("CYCLE");
+        assert_eq!(w.app.work.effect.as_ref().map(|e| e.kind), Some(fx::Kind::Cycle));
+        w.click("SAVE AS NEW");
+        w.type_text("T my cycle");
+        w.click("CREATE");
+        assert_eq!(w.app.open.as_deref(), Some("T my cycle"));
+        assert_eq!(profile::load(g316(), "T my cycle").unwrap().effect.map(|e| e.kind), Some(fx::Kind::Cycle));
+        assert!(profile::built_in("Wave"), "the preset itself is untouched");
+
+        // Back to per-key colours, then a coloured effect with its picker.
+        w.click("PER-KEY");
+        assert!(w.app.work.effect.is_none());
+        w.click("BREATHE");
+        assert!(w.app.work.effect.as_ref().is_some_and(|e| e.kind == fx::Kind::Breathe));
+        w.app.paint_selection([1, 2, 3]);
+        assert_eq!(w.app.work.effect.as_ref().map(|e| e.color), Some([1, 2, 3]), "the picker edits the effect's colour");
+        w.click("SAVE");
+        assert_eq!(profile::load(g316(), "T my cycle").unwrap().effect.map(|e| e.color), Some([1, 2, 3]));
+        profile::delete("T my cycle").unwrap();
+    }
+
+    #[test]
+    fn every_tab_and_notice_renders() {
+        let _serial = crate::testenv::serial();
+        scratch_profile("T tabs", [9, 9, 9]);
+        let mut w = Window::open();
+        w.click("T tabs");
+        w.app.selection = Set::Keys.zones(w.app.model).into_iter().collect();
+        w.app.sync_picker();
+        w.run(2);
+        assert!(w.has("ALL KEYS") && w.has("LIGHT BAR") && w.has("keyboard map"));
+        w.click("CHANNEL CHECK");
+        assert!(w.app.tab == Tab::Check && w.has("CHECK ALL KEYS") && !w.enabled("CHECK ALL KEYS"), "a check needs a connected device");
+        w.app.set = Some(Set::Strip(0));
+        w.run(2);
+        assert!(w.has("NOTHING LIT") && w.has("STOP"));
+        w.click("STOP");
+        assert!(w.app.set.is_none());
+        w.click("DEVICE");
+        assert!(w.app.tab == Tab::Device);
+        w.click("EDIT");
+        w.app.notice = Some(("Something to read".into(), AMBER));
+        w.run(1);
+        w.click("OK");
+        assert!(w.app.notice.is_none());
+        w.app.confirm = Some(Confirm::Close);
+        w.run(1);
+        assert!(w.has("SAVE AND CLOSE") && w.has("DISCARD AND CLOSE"));
+        w.app.confirm = None;
+        w.app.model = layout::find("g903-hero").unwrap();
+        w.app.work = Profile { effect: Some(Effect::new(fx::Kind::Breathe)), ..Profile::default() };
+        w.run(2);
+        assert!(w.has("COLOURS") && w.has("keyboard map"), "a mouse offers its colours mode");
+        profile::delete("T tabs").unwrap();
+    }
+
+    const NO_DEVICE: &str = "/nonexistent/loginux-ui-test";
+
+    fn service(w: &Window) -> Service {
+        *w.app.service.lock().unwrap()
+    }
+
+    fn control(w: &Window) -> Option<Control> {
+        w.app.status().map(|s| s.control.clone())
+    }
+
+    fn noticed(w: &Window, text: &str) -> bool {
+        w.app.notice.as_ref().is_some_and(|n| n.0.contains(text))
+    }
+
+    /// The stand-in systemctl answering `state`, until dropped.
+    struct ServiceState;
+
+    impl ServiceState {
+        fn set(state: &str) -> ServiceState {
+            std::fs::write(crate::testenv::systemd().join("state"), format!("{state}\n")).unwrap();
+            ServiceState
+        }
+    }
+
+    impl Drop for ServiceState {
+        fn drop(&mut self) {
+            for file in ["state", "fails"] {
+                let _ = std::fs::remove_file(crate::testenv::systemd().join(file));
+            }
+        }
+    }
+
+    fn forget_claims() {
+        for id in ["g316-x-98", "g903-hero"] {
+            let _ = std::fs::remove_file(ipc::runtime_dir().unwrap().join(format!("claim-{id}")));
+        }
+    }
+
+    #[test]
+    fn the_board_selects_by_click_shift_drag_and_keys() {
+        let _serial = crate::testenv::serial();
+        scratch_profile("T board", [255, 0, 0]);
+        let mut w = Window::open();
+        w.click("T board");
+        let m = w.app.model;
+        let (esc, f1, f2) = (38, m.named("f1").unwrap().id, m.named("f2").unwrap().id);
+        let at = w.zone(esc);
+        w.click_at(at);
+        assert_eq!(w.app.selection, BTreeSet::from([esc]));
+        w.modifiers = egui::Modifiers::SHIFT;
+        let at = w.zone(f1);
+        w.click_at(at);
+        assert_eq!(w.app.selection, BTreeSet::from([esc, f1]), "shift adds");
+        let at = w.zone(esc);
+        w.click_at(at);
+        assert_eq!(w.app.selection, BTreeSet::from([f1]), "and removes");
+        let corner = w.find("keyboard map").min + vec2(3.0, 3.0);
+        w.click_at(corner);
+        assert_eq!(w.app.selection, BTreeSet::from([f1]), "shift-clicking empty board keeps the selection");
+        w.modifiers = egui::Modifiers::NONE;
+        w.click_at(corner);
+        assert!(w.app.selection.is_empty(), "a plain click there clears it");
+
+        // Hovering names a key with its proof: checked as expected, checked as different, or layout data only.
+        w.app.checks.insert(esc, Seen { saw: "esc".into(), date: "2026-10-22".into() });
+        w.app.checks.insert(f1, Seen { saw: "nothing".into(), date: "2026-10-22".into() });
+        for id in [esc, f1, f2] {
+            let at = w.zone(id);
+            w.hover(at);
+            assert_eq!(w.app.hover, Some(id));
+        }
+
+        // Dragging from empty board selects what the box touches; with shift it adds.
+        let to = w.zone(f1);
+        w.drag(corner, to);
+        assert!(w.app.selection.contains(&esc) && w.app.selection.contains(&f1), "{:?}", w.app.selection);
+        let far = w.find("keyboard map").max - vec2(3.0, 3.0);
+        w.modifiers = egui::Modifiers::SHIFT;
+        w.drag(far, far - vec2(40.0, 40.0));
+        assert!(w.app.selection.contains(&esc) && w.app.selection.len() > 2, "added to");
+        w.modifiers = egui::Modifiers::NONE;
+        let before = w.app.selection.clone();
+        let (from, to) = (w.zone(f2), w.zone(f1));
+        w.drag(from, to);
+        assert_eq!(w.app.selection, before, "a drag that starts on a key draws no box");
+
+        w.click("ALL KEYS");
+        assert_eq!(w.app.selection.len(), 95);
+        w.click("LIGHT BAR");
+        assert_eq!(w.app.selection.len(), 30);
+        w.click("NONE");
+        assert!(w.app.selection.is_empty());
+
+        // Research zones: selected by their buttons, painted, then left dark again.
+        let unknown = m.unknown();
+        let (a, b) = (format!("zone {}", unknown[0]), format!("zone {}", unknown[1]));
+        w.click(&a);
+        w.modifiers = egui::Modifiers::SHIFT;
+        w.click(&b);
+        assert_eq!(w.app.selection, BTreeSet::from([unknown[0], unknown[1]]));
+        w.click(&b);
+        assert_eq!(w.app.selection, BTreeSet::from([unknown[0]]));
+        w.modifiers = egui::Modifiers::NONE;
+        w.app.paint_selection([0, 0, 255]);
+        w.run(1);
+        w.click("LEAVE THESE ZONES DARK");
+        assert!(!w.app.work.zones.contains_key(&unknown[0]));
+
+        w.key(Key::Escape);
+        assert!(w.app.selection.is_empty());
+        w.modifiers = egui::Modifiers::COMMAND;
+        w.key(Key::A);
+        w.modifiers = egui::Modifiers::NONE;
+        assert_eq!(w.app.selection.len(), 95, "Ctrl+A selects every key");
+        profile::delete("T board").unwrap();
+    }
+
+    #[test]
+    fn the_picker_and_palette_paint_and_select() {
+        let _serial = crate::testenv::serial();
+        scratch_profile("T picker", [255, 0, 0]);
+        let mut w = Window::open();
+        w.click("T picker");
+        let at = w.zone(38);
+        w.click_at(at);
+        let sv = w.find("saturation and brightness");
+        w.click_at(sv.min + vec2(sv.width() * 0.5, sv.height() * 0.25));
+        let after_sv = w.app.work.zones[&38];
+        assert_eq!(after_sv, from_hsv([0.0, 0.5, 0.75]));
+        let hue = w.find("hue");
+        w.click_at(hue.center());
+        let after_hue = w.app.work.zones[&38];
+        assert_ne!(after_hue, after_sv);
+        let r = w.right(Role::SpinButton);
+        w.drag(r.center(), r.center() + vec2(40.0, 0.0));
+        assert_eq!(w.app.work.zones[&38][0], after_hue[0] + 20, "R up by half a point per point dragged");
+
+        // Two colours selected: the hex field is empty, and a typed colour paints both.
+        w.modifiers = egui::Modifiers::SHIFT;
+        let at = w.zone(39);
+        w.click_at(at);
+        w.modifiers = egui::Modifiers::NONE;
+        assert!(w.app.hex_text.is_empty());
+        let hex = w.right(Role::TextInput);
+        w.click_at(hex.center());
+        w.type_text("#00ff00");
+        assert_eq!((w.app.work.zones[&38], w.app.work.zones[&39]), ([0, 255, 0], [0, 255, 0]));
+        assert_eq!(w.app.hex_text, "#00ff00", "the field keeps what was typed");
+
+        // A palette row selects every zone of its colour.
+        w.key(Key::Escape);
+        w.run(1);
+        let row = w.nodes.iter().find(|n| n.label.starts_with("#00FF00")).expect("a palette row").rect.center();
+        w.hover(row);
+        w.click_at(row);
+        assert_eq!(w.app.selection, BTreeSet::from([38, 39]));
+        for (i, id) in Set::Keys.zones(w.app.model).into_iter().enumerate() {
+            w.app.work.zones.insert(id, [i as u8, 1, 1]);
+        }
+        w.run(2);
+        assert!(w.nodes.iter().any(|n| n.label.starts_with('+') && n.label.ends_with(" more")), "the last slot counts the rest");
+        w.click("REVERT");
+        assert!(!w.app.dirty());
+        profile::delete("T picker").unwrap();
+    }
+
+    #[test]
+    fn effect_settings_follow_the_kind() {
+        let _serial = crate::testenv::serial();
+        let mut w = Window::open();
+        w.click("Colour Cycle");
+        let before = w.app.work.effect.as_ref().unwrap().period;
+        let secs = w.right(Role::SpinButton);
+        w.drag(secs.center(), secs.center() + vec2(40.0, 0.0));
+        assert_eq!(w.app.work.effect.as_ref().unwrap().period, before + 2000, "two seconds more");
+        w.click("Ripple");
+        w.click("DISCARD AND OPEN");
+        assert_eq!(w.app.work.effect.as_ref().map(|e| e.kind), Some(fx::Kind::Ripple));
+        w.run(1);
+        assert_eq!(w.nodes.iter().filter(|n| n.role == Role::SpinButton).count(), 3, "R, G and B; no period");
+    }
+
+    #[test]
+    fn names_and_failed_saves_are_explained() {
+        let _serial = crate::testenv::serial();
+        profile::set_active(None).unwrap();
+        scratch_profile("T names", [1, 2, 3]);
+        let mut w = Window::open();
+        w.click("T names");
+        w.click("+ NEW PROFILE");
+        w.type_text("T names");
+        assert!(!w.enabled("CREATE") && w.has("Letters, digits, spaces, - and _; not an existing name."));
+        w.click("CANCEL");
+        assert!(w.app.new_name.is_none());
+        w.click("+ NEW PROFILE");
+        w.key(Key::Escape);
+        assert!(w.app.new_name.is_none(), "Escape leaves too");
+
+        let dir = profile::profiles_dir();
+        std::fs::create_dir_all(dir.join("T blocked.toml.tmp")).unwrap(); // in the way of the save
+        w.click("+ NEW PROFILE");
+        w.type_text("T blocked");
+        w.click("CREATE");
+        assert!(noticed(&w, "T blocked.toml") && w.app.new_name.is_some());
+        w.click("CANCEL");
+        w.click("OK");
+        std::fs::create_dir_all(dir.join("T names.toml.tmp")).unwrap();
+        w.app.selection = BTreeSet::from([38]);
+        w.app.paint_selection([9, 9, 9]);
+        w.run(1);
+        w.click("SAVE");
+        assert!(noticed(&w, "could not save") && w.app.dirty());
+        w.click("REVERT");
+        std::fs::remove_dir(dir.join("T blocked.toml.tmp")).unwrap();
+        std::fs::remove_dir(dir.join("T names.toml.tmp")).unwrap();
+
+        // In use, then deleted: the engine is told to stop using it.
+        w.click("USE THIS PROFILE");
+        w.until("the profile is in use", |w| w.app.status().and_then(|s| s.active.as_deref()) == Some("T names"));
+        w.click("DELETE");
+        w.click("DELETE");
+        w.until("the engine drops it", |w| w.app.status().is_some_and(|s| s.active.is_none()));
+
+        // A file that vanished behind the editor's back cannot be deleted again.
+        scratch_profile("T gone", [4, 4, 4]);
+        w.app.reload_list();
+        w.run(1);
+        w.click("T gone");
+        profile::delete("T gone").unwrap();
+        w.click("DELETE");
+        w.click("DELETE");
+        assert!(w.app.notice.is_some());
+        drop(w);
+
+        // A broken file is listed, but it does not open.
+        std::fs::write(dir.join("A broken.toml"), "zones = ").unwrap();
+        let mut w = Window::open();
+        assert!(w.app.open.is_none() && noticed(&w, "A broken.toml"));
+        w.run(2);
+        assert!(w.has("A broken") && w.has("Create a profile to start painting."));
+        std::fs::remove_file(dir.join("A broken.toml")).unwrap();
+    }
+
+    #[test]
+    fn closing_or_switching_with_unsaved_changes_asks_first() {
+        let _serial = crate::testenv::serial();
+        scratch_profile("T close", [1, 1, 1]);
+        scratch_profile("T other", [2, 2, 2]);
+        let mut w = Window::open();
+        w.click("T close");
+        let edit = |w: &mut Window, c: Rgb| {
+            w.app.selection = BTreeSet::from([38]);
+            w.app.paint_selection(c);
+            w.run(1);
+        };
+        edit(&mut w, [3, 3, 3]);
+        w.close = true;
+        w.run(2);
+        assert!(matches!(w.app.confirm, Some(Confirm::Close)));
+        assert!(w.commands.iter().any(|c| matches!(c, egui::ViewportCommand::CancelClose)));
+        w.click("CANCEL");
+        assert!(w.app.confirm.is_none() && !w.app.closing);
+        w.close = true;
+        w.run(2);
+        w.click("DISCARD AND CLOSE");
+        assert!(w.app.closing && w.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
+        w.app.closing = false;
+        // A save that fails keeps the window open, with the changes.
+        let blocked = profile::profiles_dir().join("T close.toml.tmp");
+        std::fs::create_dir_all(&blocked).unwrap();
+        w.close = true;
+        w.run(2);
+        w.click("SAVE AND CLOSE");
+        assert!(!w.app.closing && w.app.dirty() && noticed(&w, "could not save"));
+        std::fs::remove_dir(&blocked).unwrap();
+        w.close = true;
+        w.run(2);
+        w.click("SAVE AND CLOSE");
+        assert!(w.app.closing && !w.app.dirty());
+        assert_eq!(profile::load(g316(), "T close").unwrap().zones.get(&38), Some(&[3, 3, 3]));
+        w.app.closing = false;
+
+        edit(&mut w, [4, 4, 4]);
+        w.click("T other");
+        w.click("SAVE AND OPEN");
+        assert_eq!(w.app.open.as_deref(), Some("T other"));
+        assert_eq!(profile::load(g316(), "T close").unwrap().zones.get(&38), Some(&[4, 4, 4]));
+
+        // A signal closes the window the normal way.
+        STOP.store(true, Ordering::SeqCst);
+        w.run(1);
+        STOP.store(false, Ordering::SeqCst);
+        assert!(w.app.closing);
+        profile::delete("T close").unwrap();
+        profile::delete("T other").unwrap();
+    }
+
+    #[test]
+    fn keyboard_focus_moves_with_tab_and_shows() {
+        let _serial = crate::testenv::serial();
+        let mut w = Window::open();
+        for _ in 0..12 {
+            w.key(Key::Tab);
+        }
+        assert!(w.ctx.memory(|m| m.focused()).is_some());
+    }
+
+    #[test]
+    fn the_service_switch_runs_systemctl_and_shows_failures() {
+        let _serial = crate::testenv::serial();
+        let systemd = crate::testenv::systemd();
+        let _ = std::fs::remove_file(systemd.join("log"));
+        let _state = ServiceState::set("disabled");
+        let mut w = Window::open();
+        w.until("systemd answers", |w| service(w) == Service::Disabled);
+        w.click("RUN AT LOGIN");
+        w.until("the service is enabled", |w| service(w) == Service::Enabled);
+        assert!(w.app.hosted.is_none(), "the window handed its engine over");
+        w.click("RUNS AT LOGIN");
+        w.until("the service is disabled", |w| service(w) == Service::Disabled);
+        std::fs::write(systemd.join("fails"), "").unwrap();
+        w.click("RUN AT LOGIN");
+        w.until("the failure shows", |w| noticed(w, "systemctl --user enable --now: Failed to enable loginux.service"));
+        std::fs::remove_file(systemd.join("fails")).unwrap();
+        let log = std::fs::read_to_string(systemd.join("log")).unwrap();
+        assert!(log.contains("--user enable --now loginux.service") && log.contains("--user disable --now loginux.service"), "{log}");
+        *w.app.service.lock().unwrap() = Service::Unknown;
+        w.run(1);
+        assert!(w.has("RUN AT LOGIN") && !w.enabled("RUN AT LOGIN"), "nothing to click before systemd answers");
+    }
+
+    #[test]
+    fn hosting_waits_for_systemd_and_other_engines() {
+        let _serial = crate::testenv::serial();
+        let systemd = crate::testenv::systemd();
+        // An enabled service that is not running is started, once.
+        let _ = std::fs::remove_file(systemd.join("log"));
+        let state = ServiceState::set("enabled");
+        let mut w = Window::on(Some(NO_DEVICE));
+        let started = |_: &Window| std::fs::read_to_string(crate::testenv::systemd().join("log")).is_ok_and(|l| l.contains("start loginux.service"));
+        w.until("the service is started", started);
+        assert!(w.app.hosted.is_none());
+        drop(w);
+        drop(state);
+
+        // Before systemd answers, nothing is hosted.
+        let mut w = Window::on(Some(NO_DEVICE));
+        let end = Instant::now() + Duration::from_secs(5);
+        while service(&w) == Service::Unknown && Instant::now() < end {
+            thread::sleep(Duration::from_millis(10));
+        }
+        *w.app.service.lock().unwrap() = Service::Unknown;
+        w.until("the link finds no engine", |w| matches!(w.app.link.0.0.lock().unwrap().status, Some(Err(_))));
+        assert!(w.app.hosted.is_none() && w.app.host_tried.is_none(), "waiting for systemd is not an attempt");
+
+        // Another engine holds the lock: its socket will appear, so nothing is hosted either.
+        *w.app.service.lock().unwrap() = Service::NotInstalled;
+        let held = engine::lock(false).unwrap().expect("free");
+        w.app.host_tried = None;
+        w.run(1);
+        assert!(w.app.hosted.is_none() && w.app.host_tried.is_some());
+        drop(held);
+
+        // The lock cannot be taken at all: explained.
+        let lock = ipc::runtime_dir().unwrap().join("lock");
+        let _ = std::fs::remove_file(&lock);
+        std::fs::create_dir(&lock).unwrap();
+        w.app.host_tried = None;
+        w.run(1);
+        std::fs::remove_dir(&lock).unwrap();
+        assert!(noticed(&w, "lock"));
+    }
+
+    #[test]
+    fn a_connected_keyboard_shows_its_state_checks_and_settings() {
+        let _serial = crate::testenv::serial();
+        forget_claims();
+        profile::set_active(None).unwrap();
+        let _ = std::fs::remove_file(profile::checks_path(g316()));
+        scratch_profile("T live", [255, 0, 0]);
+        let kb = crate::fake::plug("/dev/fake-ui", "g316-x-98", crate::fake::g316());
+        let mut w = Window::hosting(Some("/dev/fake-ui"));
+        w.until("the keyboard connects", |w| w.app.connected_zones().is_some());
+        assert_eq!(w.app.open.as_deref(), Some("T live"), "saved profiles come before the presets");
+        let at = w.zone(38);
+        w.click_at(at);
+        w.app.paint_selection([255, 0, 0]);
+        w.until("the edits show live", |w| control(w) == Some(Control::Preview));
+        assert!(w.has("G316 X 98 on /dev/fake-ui") && w.has("Showing your edits live."));
+        w.until("Esc is red on the keyboard", |_| kb.state().shown.get(&38) == Some(&[255, 0, 0]));
+        w.click("RELEASE LIGHTING");
+        w.until("onboard lighting again", |w| control(w) == Some(Control::Onboard));
+        w.click("USE THIS PROFILE");
+        w.until("the profile is shown", |w| matches!(control(w), Some(Control::Profile { .. })));
+        w.run(1);
+        assert!(w.has("Showing T live."));
+        kb.state().sw = (1, 5); // another program takes the lighting
+        w.until("the conflict shows", |w| matches!(control(w), Some(Control::Conflict { .. })));
+        w.run(1);
+        w.click("TAKE OVER");
+        w.until("taken back", |w| matches!(control(w), Some(Control::Profile { .. })));
+
+        // Channel check: answers by clicking where the light is, or by the buttons.
+        w.click("CHANNEL CHECK");
+        let strip = w.app.model.strips[0].zones.clone();
+        let at = w.find("CHECK LIGHT BAR").center();
+        w.hover(at);
+        assert!(w.app.focus == Set::Strip(0));
+        w.click("CHECK LIGHT BAR");
+        assert!(w.app.set == Some(Set::Strip(0)) && w.app.step == 0);
+        w.until("zone lit", |w| control(w) == Some(Control::Check { zone: strip[0] }));
+        let at = w.zone(strip[0]);
+        w.click_at(at);
+        w.click("NOTHING LIT");
+        w.click("NOT ON THE MAP");
+        w.click("SKIP");
+        w.click("BACK");
+        assert_eq!(w.app.step, 3);
+        let saw = |w: &Window, i: usize| w.app.checks.get(&strip[i]).map(|s| s.saw.clone());
+        assert_eq!((saw(&w, 0), saw(&w, 1), saw(&w, 2)), (Some("bar1".into()), Some("nothing".into()), Some("elsewhere".into())));
+        w.app.step = strip.len() - 1;
+        w.click("SKIP");
+        w.run(1);
+        assert!(w.app.set.is_none(), "past the last zone the run ends");
+        w.click("CHECK UNKNOWN ZONES");
+        w.click("NOTHING LIT");
+        w.click("STOP");
+        w.run(1);
+        assert!(w.has("saw nothing"));
+        let at = w.find("CHECK LIGHT BAR").center();
+        w.hover(at);
+        assert!(w.has("as expected") && w.has("lit nothing") && w.has("not answered"));
+        w.click("CLEAR THESE ANSWERS");
+        assert!(strip.iter().all(|id| !w.app.checks.contains_key(id)));
+        let tmp = profile::checks_path(g316()).with_extension("toml.tmp");
+        std::fs::create_dir_all(&tmp).unwrap(); // saving answers fails
+        w.click("CHECK LIGHT BAR");
+        w.click("NOTHING LIT");
+        assert!(noticed(&w, "g316-x-98.toml"));
+        w.click("STOP");
+        w.click("OK");
+        w.click("CLEAR THESE ANSWERS");
+        assert!(noticed(&w, "g316-x-98.toml"));
+        std::fs::remove_dir(&tmp).unwrap();
+        w.click("OK");
+
+        // Device settings, and a report-rate change: cancelled, confirmed, then refused.
+        w.click("DEVICE");
+        w.run(1);
+        w.click("2000 HZ");
+        w.click("CANCEL");
+        assert!(w.app.rate_confirm.is_none());
+        w.click("2000 HZ");
+        w.click("CHANGE RATE");
+        w.until("the change waits for the keyboard", |w| w.has("Waiting for the keyboard to confirm 2000 Hz\u{2026}"));
+        w.until("the rate reads back", |w| w.has("Report rate read back as 2000 Hz."));
+        kb.state().refuse_rate = Some((5, 2));
+        w.click("4000 HZ");
+        w.click("CHANGE RATE");
+        w.until("the refusal shows", |w| w.nodes.iter().any(|n| n.label.starts_with("The change to 4000 Hz did not take")));
+        assert!(noticed(&w, "refused 4000 Hz"));
+
+        // A second window uses this engine, and leaves it running when it closes.
+        let second = Window::on(Some("/dev/fake-ui"));
+        assert!(second.app.status.is_ok() && second.app.hosted.is_none());
+        drop(second);
+        assert!(w.app.status().is_some());
+        ok_use_none(&mut w);
+        profile::delete("T live").unwrap();
+        let _ = std::fs::remove_file(profile::checks_path(g316()));
+        forget_claims();
+    }
+
+    #[test]
+    fn a_missing_wrong_or_other_device_is_explained() {
+        let _serial = crate::testenv::serial();
+        let device = |w: &Window| w.app.status().map(|s| s.device.clone());
+        let mut w = Window::hosting(None);
+        w.until("nothing plugged in", |w| matches!(device(w), Some(Device::Missing)));
+        w.run(1);
+        assert!(w.has("Plug the G316 X 98 in; loginux picks it up."));
+        drop(w);
+        let file = crate::testenv::init().join("not-a-keyboard");
+        std::fs::write(&file, "").unwrap();
+        let mut w = Window::hosting(file.to_str());
+        w.until("not a keyboard", |w| matches!(device(w), Some(Device::Failed { .. })));
+        w.run(1);
+        drop(w);
+
+        // A mouse, while the window edits the keyboard: said so, and its effects decide the row.
+        forget_claims();
+        let _mouse = crate::fake::plug("/dev/fake-ui-mouse", "g903-hero", crate::fake::g903());
+        scratch_profile("T mouse", [1, 1, 1]);
+        let mut w = Window::hosting(Some("/dev/fake-ui-mouse"));
+        w.click("T mouse");
+        w.until("the mouse connects", |w| w.app.connected_zones().is_some());
+        w.run(1);
+        assert!(noticed(&w, "The connected keyboard is a Logitech G903 HERO"));
+        assert!(w.has("WAVE") && !w.enabled("WAVE") && w.enabled("BREATHE"));
+        w.click("DEVICE");
+        w.run(1);
+        assert!(!w.nodes.iter().any(|n| n.label.ends_with(" HZ")), "no report rates to set on this mouse");
+        profile::delete("T mouse").unwrap();
+        forget_claims();
+    }
+
+    #[test]
+    fn the_window_icon_is_the_mark_at_128_pixels() {
+        let icon = window_icon();
+        assert_eq!((icon.width, icon.height, icon.rgba.len()), (128, 128, 128 * 128 * 4));
+    }
+
 }

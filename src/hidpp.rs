@@ -14,6 +14,7 @@ use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 const LONG: u8 = 0x11;
@@ -90,9 +91,24 @@ fn is_model(class_dir: &Path, m: &Model) -> bool {
     identity(class_dir).is_some_and(|(v, p, i, _)| (v, p, i) == (m.vendor, m.product, m.interface))
 }
 
+static SYSFS: OnceLock<PathBuf> = OnceLock::new();
+
+/// Where sysfs is mounted. Tests get a scratch tree instead (`use_sysfs`), so
+/// no test can find, or open, a device plugged into the machine running it.
+fn sysfs() -> &'static Path {
+    #[cfg(test)]
+    crate::testenv::init();
+    SYSFS.get_or_init(|| PathBuf::from("/sys"))
+}
+
+#[cfg(test)]
+pub fn use_sysfs(root: PathBuf) {
+    SYSFS.set(root).expect("the sysfs root is chosen before any lookup");
+}
+
 fn nodes() -> Vec<PathBuf> {
     let mut nodes: Vec<PathBuf> =
-        fs::read_dir("/sys/class/hidraw").into_iter().flatten().filter_map(|e| Some(e.ok()?.path())).collect();
+        fs::read_dir(sysfs().join("class/hidraw")).into_iter().flatten().filter_map(|e| Some(e.ok()?.path())).collect();
     nodes.sort();
     nodes
 }
@@ -122,7 +138,7 @@ fn class_dir(file: &File, path: &Path) -> Result<PathBuf, Error> {
     // glibc's dev_t encoding, as in gnu_dev_major/gnu_dev_minor.
     let major = ((rdev >> 32) & 0xffff_f000) | ((rdev >> 8) & 0x0fff);
     let minor = ((rdev >> 12) & 0xffff_ff00) | (rdev & 0x00ff);
-    Ok(PathBuf::from(format!("/sys/dev/char/{major}:{minor}")))
+    Ok(sysfs().join(format!("dev/char/{major}:{minor}")))
 }
 
 /// The model whose HID++ interface `path` is, checked through sysfs.
@@ -160,6 +176,13 @@ impl Hidpp {
             .map_err(|e| Error::Access(path.into(), e))?;
         class_dir(&file, path)?; // a character device, or nothing is sent
         Ok(Hidpp { file, device, swid: 0, notes: VecDeque::new() })
+    }
+
+    /// A transport over an already open file, such as one end of a socket pair
+    /// in tests; production code goes through `open`, which checks the device.
+    #[cfg(test)]
+    pub fn from_file(file: File, device: u8) -> Self {
+        Hidpp { file, device, swid: 0, notes: VecDeque::new() }
     }
 
     /// sysfs identity of the opened node.
@@ -232,10 +255,11 @@ impl Hidpp {
             let n = unsafe { libc::poll(&mut pfd, 1, ms) };
             if n < 0 {
                 let e = io::Error::last_os_error();
-                if e.kind() == io::ErrorKind::Interrupted {
-                    continue;
+                match e.kind() {
+                    io::ErrorKind::Interrupted => continue,
+                    // poll on one valid descriptor fails otherwise only with EFAULT, EINVAL or ENOMEM
+                    _ => return Err(Error::Gone(e)), // LCOV_EXCL_LINE
                 }
-                return Err(Error::Gone(e));
             }
             if n == 0 {
                 return Ok(None);
@@ -254,6 +278,189 @@ impl Hidpp {
                 Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted) => {}
                 Err(e) => return Err(Error::Gone(e)),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fake;
+    use std::thread;
+
+    use crate::testenv;
+    use std::fs::File;
+
+    /// A hidraw class directory outside the scratch sysfs, for `identity` alone.
+    fn sysfs(name: &str, hid_id: &str, interface: &str) -> PathBuf {
+        let class = testenv::init().join("trees").join(name);
+        testenv::hid_node(&class, hid_id, interface);
+        class
+    }
+
+    fn g316() -> &'static Model {
+        crate::layout::find("g316-x-98").unwrap()
+    }
+
+    #[test]
+    fn identity_comes_from_the_hid_and_usb_nodes() {
+        let class = sysfs("g316", "0003:0000046D:0000C36B", "02");
+        assert_eq!(identity(&class), Some((0x046d, 0xc36b, 2, "Logitech G316 X 98".into())));
+        let g316 = g316();
+        assert!(is_model(&class, g316));
+        assert!(!is_model(&class, crate::layout::find("g903-hero").unwrap()));
+        assert!(!is_model(&sysfs("other-if", "0003:0000046D:0000C36B", "01"), g316), "the key-report interface is not ours");
+        assert_eq!(identity(&sysfs("bluetooth", "0005:0000046D:0000C36B", "02")), None, "USB only");
+        assert_eq!(identity(Path::new("/nonexistent")), None);
+    }
+
+    #[test]
+    fn replies_errors_and_notifications() {
+        let (mut io, fake) = fake::transport(fake::g316(), 0xFF);
+        let what = Call { feature: 0, function: 1 };
+        assert_eq!(&io.call(0, 1, &[0, 0, 0x5A], what).unwrap()[..3], &[4, 2, 0x5A]);
+        // An index the device does not have: its error report comes back as Device.
+        let bad = io.call(99, 0, &[], Call { feature: 0x1234, function: 0 }).unwrap_err();
+        assert!(matches!(bad, Error::Device(_, 6)));
+        assert_eq!(bad.to_string(), "keyboard rejected feature 0x1234 function 0 with HID++ error 0x06");
+        // A notification waiting in front of a reply is kept, and the reply still matches.
+        fake.notify(13, 0, &[1]);
+        assert_eq!(&io.call(0, 1, &[0, 0, 7], what).unwrap()[..3], &[4, 2, 7]);
+        let notes = io.notifications();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(&notes[0][..5], &[0x11, 0xFF, 13, 0x00, 1]);
+        assert!(io.notifications().is_empty());
+    }
+
+    #[test]
+    fn notifications_are_bounded() {
+        let (mut io, fake) = fake::transport(fake::g316(), 0xFF);
+        for i in 0..40 {
+            fake.notify(13, 0, &[i]);
+        }
+        io.drain().unwrap();
+        let notes = io.notifications();
+        assert_eq!((notes.len(), notes[0][4], notes[31][4]), (32, 8, 39), "the oldest are dropped");
+    }
+
+    #[test]
+    fn silence_times_out_and_a_closed_device_is_gone() {
+        let (mut io, _peer) = fake::silent(0xFF);
+        let what = Call { feature: 0, function: 1 };
+        let t = Instant::now();
+        assert!(matches!(io.call(0, 1, &[], what), Err(Error::Timeout(_))));
+        assert!(t.elapsed() >= REPLY_TIMEOUT);
+        let (mut io, fake) = fake::transport(fake::g316(), 0xFF);
+        fake.unplug();
+        assert!(matches!(io.call(0, 1, &[], what), Err(Error::Gone(_))));
+    }
+
+    #[test]
+    fn opening_checks_the_node() {
+        let g316 = g316();
+        assert!(matches!(Hidpp::open(Path::new("/nonexistent/hidraw9"), g316), Err(Error::Access(..))));
+        // A regular file is not a character device, so nothing is sent to it.
+        let file = testenv::init().join("not-a-device");
+        fs::write(&file, "").unwrap();
+        assert!(matches!(Hidpp::open_unchecked(&file, 0xFF), Err(Error::WrongDevice(_))));
+        assert!(matches!(identify(&file, crate::layout::models()), Err(Error::WrongDevice(_))));
+    }
+
+    #[test]
+    fn find_and_present_look_for_the_hidpp_interface() {
+        let _serial = testenv::serial();
+        // The scratch sysfs starts with a G316's key-report interface only.
+        assert!(matches!(find(crate::layout::models()), Err(Error::NotFound)));
+        assert!(!present(g316()));
+        let node = testenv::init().join("sysfs/class/hidraw/hidraw-fake1");
+        testenv::hid_node(&node, "0003:0000046D:0000C36B", "02");
+        let found = find(crate::layout::models());
+        fs::remove_dir_all(&node).unwrap();
+        let (path, model) = found.unwrap();
+        assert_eq!((path.as_path(), model.id.as_str()), (Path::new("/dev/hidraw-fake1"), "g316-x-98"));
+        assert!(!present(g316()), "gone with its node");
+    }
+
+    #[test]
+    fn a_character_device_is_checked_through_its_device_number() {
+        // /dev/null is character device 1:3, which the scratch sysfs makes a G316.
+        let null = Path::new("/dev/null");
+        assert_eq!(identify(null, crate::layout::models()).unwrap().id, "g316-x-98");
+        let g903 = crate::layout::find("g903-hero").unwrap();
+        assert!(matches!(Hidpp::open(null, g903), Err(Error::WrongDevice(_))), "not a G903");
+        assert!(matches!(identify(Path::new("/dev/zero"), crate::layout::models()), Err(Error::WrongDevice(_))));
+        let mut io = Hidpp::open(null, g316()).unwrap();
+        assert_eq!(io.identity(null), Some((0x046d, 0xc36b, 2, "Logitech G316 X 98".into())));
+        // Reading /dev/null ends at once, the way a hidraw node does once the device is gone.
+        assert!(matches!(io.call(0, 1, &[], Call { feature: 0, function: 1 }), Err(Error::Gone(_))));
+    }
+
+    #[test]
+    fn replies_to_others_are_skipped() {
+        let (mut io, peer) = fake::silent(0xFF);
+        let device = thread::spawn(move || {
+            let mut request = [0u8; 20];
+            (&peer).read_exact(&mut request).unwrap();
+            let (index, fsw) = (request[2], request[3]);
+            let report = |head: [u8; 4]| {
+                let mut r = [0u8; 20];
+                r[..4].copy_from_slice(&head);
+                r[4] = 0x42;
+                (&peer).write_all(&r).unwrap();
+            };
+            report([0x01, 0xFF, index, fsw]); // a keyboard input report
+            report([LONG, 0x01, index, fsw]); // another device index
+            report([LONG, 0xFF, index + 1, fsw]); // another feature's reply
+            report([LONG, 0xFF, index, fsw ^ 0x01]); // another program's software ID
+            report([LONG, 0xFF, index, fsw]);
+            peer
+        });
+        let reply = io.call(3, 1, &[], Call { feature: 0x0003, function: 1 }).unwrap();
+        assert_eq!(reply[0], 0x42);
+        assert!(io.notifications().is_empty(), "replies are not notifications");
+        drop(device.join());
+    }
+
+    #[test]
+    fn a_signal_does_not_cut_the_wait_short() {
+        let (mut io, _peer) = fake::silent(0xFF);
+        // SAFETY: the calling thread's own ID.
+        let me = unsafe { libc::pthread_self() };
+        let poke = thread::spawn(move || {
+            for _ in 0..3 {
+                thread::sleep(Duration::from_millis(200));
+                testenv::interrupt(me); // the second wait is surely inside poll on a slow machine too
+            }
+        });
+        let t = Instant::now();
+        assert!(matches!(io.call(0, 1, &[], Call { feature: 0, function: 1 }), Err(Error::Timeout(_))));
+        assert!(t.elapsed() >= REPLY_TIMEOUT, "the interrupted poll was resumed");
+        poke.join().unwrap();
+    }
+
+    #[test]
+    fn a_failed_read_means_the_device_is_gone() {
+        // A directory polls as readable and fails every read.
+        let mut io = Hidpp::from_file(File::open(testenv::init()).unwrap(), 0xFF);
+        assert!(matches!(io.drain(), Err(Error::Gone(e)) if e.raw_os_error() == Some(libc::EISDIR)));
+    }
+
+    #[test]
+    fn every_error_explains_itself() {
+        let c = Call { feature: 0x8071, function: 5 };
+        let io = || io::Error::from_raw_os_error(libc::ENODEV);
+        for (e, says) in [
+            (Error::NotFound, "no supported keyboard"),
+            (Error::Access("/dev/x".into(), io()), "install the udev rule"),
+            (Error::WrongDevice("/dev/x".into()), "not the HID++ interface"),
+            (Error::Gone(io()), "disconnected"),
+            (Error::Timeout(c), "no reply to feature 0x8071 function 5"),
+            (Error::Busy(c), "stayed busy"),
+            (Error::Unsupported(0x8081), "feature 0x8081"),
+            (Error::Reply(c, "short".into()), "unexpected reply"),
+            (Error::Refused(c), "outside loginux's write boundary"),
+        ] {
+            assert!(e.to_string().contains(says), "{e}");
         }
     }
 }

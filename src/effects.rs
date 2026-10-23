@@ -191,12 +191,12 @@ impl Effect {
                 p[..3].copy_from_slice(&[r, g, b]);
                 p[4..6].copy_from_slice(&period);
             }
-            0x17 => {
+            _ => {
+                // 0x17: the one ID Kind::ids lists that the arms above leave
                 p[..3].copy_from_slice(&[r, g, b]);
                 p[3] = self.saturation;
                 p[6..8].copy_from_slice(&period);
             }
-            _ => unreachable!("every listed ID has a layout"),
         }
         Ok((id, p))
     }
@@ -214,6 +214,62 @@ mod tests {
         assert_eq!(cycle.encode(&[0x03]).unwrap(), (0x03, [0, 0, 0, 0, 0, 0x13, 0x88, 100, 0, 0]));
         assert!(Effect::parse("ripple").unwrap().encode(&[0x01, 0x03]).is_err());
         assert!(Effect::parse("glow").is_err());
+    }
+
+    #[test]
+    fn every_layout_puts_the_parameters_where_solaar_says() {
+        let e = Effect { kind: Kind::Static, color: [1, 2, 3], period: 0x1234, intensity: 50, saturation: 200, direction: 6 };
+        let with = |kind| Effect { kind, ..e.clone() };
+        assert_eq!(e.encode(&[0x01]).unwrap(), (0x01, [1, 2, 3, 0, 0, 0, 0, 0, 0, 0]));
+        assert_eq!(with(Kind::Cycle).encode(&[0x03]).unwrap().1, [0, 0, 0, 0, 0, 0x12, 0x34, 50, 0, 0]);
+        assert_eq!(with(Kind::Cycle).encode(&[0x15]).unwrap().1, [0, 200, 0, 0, 0, 0, 0x12, 0x34, 50, 0]);
+        assert_eq!(with(Kind::Cycle).encode(&[0x03, 0x15]).unwrap().0, 0x15, "the newer cycle wins");
+        assert_eq!(with(Kind::Breathe).encode(&[0x0a]).unwrap().1, [1, 2, 3, 0x12, 0x34, 0, 50, 0, 0, 0]);
+        assert_eq!(with(Kind::Wave).encode(&[0x04]).unwrap().1, [0, 200, 0, 0, 0, 0, 0x12, 0x34, 50, 6]);
+        assert_eq!(with(Kind::Wave).encode(&[0x16]).unwrap().1, [0, 200, 0, 0, 0, 0, 0x12, 0x34, 50, 6]);
+        assert_eq!(with(Kind::Ripple).encode(&[0x0b]).unwrap().1, [1, 2, 3, 0, 0x12, 0x34, 0, 0, 0, 0]);
+        assert_eq!(with(Kind::Ripple).encode(&[0x17]).unwrap().1, [1, 2, 3, 200, 0, 0, 0x12, 0x34, 0, 0]);
+        assert!(with(Kind::Breathe).encode(&[0x01, 0x03]).unwrap_err().contains("no Breathe effect"));
+    }
+
+    #[test]
+    fn kinds_by_name_and_capability() {
+        for k in Kind::ALL {
+            assert_eq!(Kind::from_name(k.name()).unwrap(), k);
+        }
+        assert!(Kind::from_name("sparkle").is_err());
+        assert!(Kind::Wave.on(&[0x01, 0x04]) && !Kind::Wave.on(&[0x01, 0x0a]));
+        assert!(Kind::Breathe.coloured() && Kind::Ripple.coloured() && Kind::Static.coloured());
+        assert!(!Kind::Cycle.coloured() && !Kind::Wave.coloured());
+        assert_eq!((Effect::new(Kind::Ripple).period, Effect::new(Kind::Wave).period), (20, 5000));
+    }
+
+    #[test]
+    fn parsing_effect_arguments() {
+        assert_eq!(Effect::parse("wave,direction=centre-in").unwrap().direction, 8);
+        assert_eq!(Effect::parse("wave,direction=7").unwrap().direction, 7);
+        let b = Effect::parse("breathe,color=00ff00,intensity=40,saturation=10").unwrap();
+        assert_eq!((b.color, b.intensity, b.saturation), ([0, 255, 0], 40, 10));
+        for (text, says) in [
+            ("wave,period", "not key=value"),
+            ("breathe,intensity=101", "out of range"),
+            ("wave,direction=9", "out of range"),
+            ("cycle,saturation=256", "out of range"),
+            ("cycle,speed=3", "not an effect parameter"),
+            ("breathe,color=red", "not a colour"),
+        ] {
+            assert!(Effect::parse(text).unwrap_err().contains(says), "{text}");
+        }
+    }
+
+    #[test]
+    fn tables_write_only_what_the_kind_uses() {
+        assert_eq!(Effect::new(Kind::Static).to_table(), "[effect]\nkind = \"static\"\ncolor = \"#ffffff\"\n");
+        assert_eq!(Effect::new(Kind::Cycle).to_table(), "[effect]\nkind = \"cycle\"\nperiod = 5000\n");
+        let wave = Effect::parse("wave,direction=down").unwrap().to_table();
+        assert!(wave.ends_with("direction = \"down\"\n") && !wave.contains("color"), "{wave}");
+        let odd = Effect { direction: 4, ..Effect::new(Kind::Wave) };
+        assert_eq!(odd.direction_name(), "right", "an unnamed direction prints as the default");
     }
 
     #[test]

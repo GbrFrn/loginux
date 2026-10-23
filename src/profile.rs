@@ -162,6 +162,8 @@ impl Profile {
 }
 
 pub fn config_dir() -> PathBuf {
+    #[cfg(test)]
+    crate::testenv::init();
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
@@ -339,10 +341,16 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::effects::Kind as Fx;
+
+    fn g316() -> &'static Model {
+        crate::testenv::init();
+        layout::find("g316-x-98").unwrap()
+    }
 
     #[test]
     fn round_trip_and_rejections() {
-        let m = &layout::models()[0];
+        let m = g316();
         let p = Profile::parse(m, "[keys]\nbase = \"#102030\"\nEsc = \"ff0000\"\n[bar]\nbar1 = \"#00ff00\"\n[zones]\n154 = \"#ffffff\"\n")
             .unwrap();
         assert_eq!(p.base("keys"), [0x10, 0x20, 0x30]);
@@ -357,5 +365,204 @@ mod tests {
         assert!(p.frame(m, &[38, 160]).is_err()); // 154 is set but not reported
         assert_eq!(today().len(), 10);
         assert!(!valid_name("../x") && !valid_name(".hidden") && valid_name("Arrow keys"));
+    }
+
+    #[test]
+    fn create_save_list_load_and_delete() {
+        let m = g316();
+        let mut p = Profile::default();
+        p.bases.insert("keys".into(), [1, 2, 3]);
+        p.zones.insert(38, [255, 0, 0]);
+        save(m, "T save", &p).unwrap();
+        let file = path("T save").unwrap();
+        assert!(file.exists() && modified(&file).is_some());
+        let names = list();
+        let at = names.iter().position(|n| n == "T save").expect("listed");
+        assert!(at < names.iter().position(|n| n == "Breathing").unwrap(), "user profiles before presets");
+        assert_eq!(load(m, "T save").unwrap(), p);
+        assert!(fs::read_to_string(&file).unwrap().starts_with("# Loginux lighting profile"));
+        // Saving again replaces the file; the temporary file never stays behind.
+        p.zones.insert(39, [0, 255, 0]);
+        save(m, "T save", &p).unwrap();
+        assert_eq!(load(m, "T save").unwrap().zones.len(), 2);
+        assert!(!file.with_extension("toml.tmp").exists());
+        delete("T save").unwrap();
+        assert!(!list().contains(&"T save".to_string()));
+        assert!(load(m, "T save").unwrap_err().contains("T save"));
+        assert!(delete("T save").is_err());
+    }
+
+    #[test]
+    fn choosing_a_profile_and_a_keyboard() {
+        let _serial = crate::testenv::serial();
+        set_keyboard("g316-x-98").unwrap();
+        set_active(Some("T chosen")).unwrap();
+        assert_eq!((active().as_deref(), chosen_keyboard().as_deref()), (Some("T chosen"), Some("g316-x-98")));
+        set_active(None).unwrap();
+        assert_eq!((active(), chosen_keyboard().as_deref()), (None, Some("g316-x-98")), "the keyboard stays");
+        assert!(set_active(Some("../escape")).is_err());
+        set_keyboard("bad id!").unwrap(); // an invalid id is dropped, not written
+        assert_eq!(chosen_keyboard(), None);
+    }
+
+    #[test]
+    fn presets_are_listed_loaded_and_protected() {
+        let _serial = crate::testenv::serial();
+        let m = g316();
+        let names = list();
+        assert_eq!(&names[names.len() - 4..], ["Breathing", "Colour Cycle", "Wave", "Ripple"]);
+        for (name, kind) in [("Breathing", Fx::Breathe), ("Colour Cycle", Fx::Cycle), ("Wave", Fx::Wave), ("Ripple", Fx::Ripple)] {
+            assert!(built_in(name), "{name}");
+            assert_eq!(load(m, name).unwrap().effect.map(|e| e.kind), Some(kind), "{name}");
+        }
+        assert_eq!(load(m, "Wave").unwrap().effect.unwrap().direction_name(), "right");
+        assert!(delete("Wave").unwrap_err().contains("built in"));
+        assert!(!built_in("Evening") && !built_in("../Wave"));
+    }
+
+    #[test]
+    fn a_profile_file_replaces_the_preset_of_the_same_name() {
+        let _serial = crate::testenv::serial();
+        let m = g316();
+        let mut mine = Profile::default();
+        mine.bases.insert("keys".into(), [9, 9, 9]);
+        save(m, "Ripple", &mine).unwrap();
+        assert!(!built_in("Ripple"));
+        assert_eq!(load(m, "Ripple").unwrap(), mine);
+        assert_eq!(list().iter().filter(|n| *n == "Ripple").count(), 1, "listed once");
+        delete("Ripple").unwrap(); // removing the file brings the preset back
+        assert!(built_in("Ripple"));
+        assert!(load(m, "Ripple").unwrap().effect.is_some());
+    }
+
+    #[test]
+    fn effect_profiles_round_trip() {
+        let m = g316();
+        let text = "[effect]\nkind = \"wave\"\nperiod = 2500\ndirection = \"up\"\n\n[keys]\nbase = \"#202020\"\n";
+        let p = Profile::parse(m, text).unwrap();
+        let e = p.effect.clone().unwrap();
+        assert_eq!((e.kind, e.period, e.direction_name()), (Fx::Wave, 2500, "up"));
+        let out = p.to_toml(m);
+        assert!(out.contains("[effect]\nkind = \"wave\"\nperiod = 2500\ndirection = \"up\""), "{out}");
+        assert_eq!(Profile::parse(m, &out).unwrap(), p);
+        let breathe = Profile::parse(m, "[effect]\nkind = \"breathe\"\ncolor = \"#ff2e3f\"\nperiod = 4000\n").unwrap();
+        assert_eq!(breathe.effect.unwrap().color, [0xff, 0x2e, 0x3f]);
+    }
+
+    #[test]
+    fn effect_tables_explain_their_mistakes() {
+        let m = g316();
+        for (text, says) in [
+            ("[effect]\nperiod = 3000", "needs a kind"),
+            ("[effect]\nkind = \"sparkle\"", "not an effect"),
+            ("[effect]\nkind = \"wave\"\ndirection = \"sideways\"", "out of range"),
+            ("[effect]\nkind = \"cycle\"\nperiod = 70000", "out of range"),
+            ("[effect]\nkind = \"cycle\"\nspeed = 3", "not an effect parameter"),
+            ("[effect]\nkind = \"breathe\"\ncolor = true", "neither text nor a whole number"),
+            ("[effect]\nkind = \"breathe\"\ncolor = \"#12\"", "not a colour"),
+        ] {
+            let e = Profile::parse(m, text).unwrap_err();
+            assert!(e.contains(says), "{text:?} gave {e:?}");
+        }
+    }
+
+    #[test]
+    fn profile_files_explain_their_mistakes() {
+        let m = g316();
+        for (text, says) in [
+            ("keys = 1", "must be a [keys] table"),
+            ("[keys]\nesc = 5", "write the colour as a string"),
+            ("[nonsense]\nx = \"#ffffff\"", "unknown section [nonsense]"),
+            ("[bar]\nbar99 = \"#ffffff\"", "[bar] takes base and bar1 to barN"),
+            ("[zones]\n250 = \"#ffffff\"", "not one of the Logitech G316 X 98's zone IDs"),
+            ("[keys]\nesc = \"#ffffff\"\nEsc = \"#000000\"", "twice"),
+            ("not toml", "expected"),
+        ] {
+            let e = Profile::parse(m, text).unwrap_err();
+            assert!(e.contains(says), "{text:?} gave {e:?}");
+        }
+    }
+
+    #[test]
+    fn a_mouse_profile_has_a_lights_table() {
+        crate::testenv::init();
+        let m = layout::find("g903-hero").unwrap();
+        let p = Profile::parse(m, "[lights]\nlogo = \"#00ff00\"\n").unwrap();
+        assert_eq!(p.colour(m, 1), Some([0, 255, 0]));
+        let out = p.to_toml(m);
+        assert!(out.contains("[lights]\nlogo = \"#00ff00\"") && !out.contains("[keys]") && !out.contains("base ="), "{out}");
+        assert!(Profile::parse(m, "[keys]\nesc = \"#ffffff\"").is_err());
+    }
+
+    #[test]
+    fn colours_frames_and_zone_checks() {
+        let m = g316();
+        let mut p = Profile::default();
+        p.bases.insert("keys".into(), [1, 1, 1]);
+        p.zones.insert(38, [9, 0, 0]);
+        assert_eq!((p.colour(m, 38), p.colour(m, 39)), (Some([9, 0, 0]), Some([1, 1, 1])));
+        assert_eq!(p.colour(m, 160), Some([0, 0, 0]), "an unset base is dark");
+        assert_eq!(p.colour(m, 250), None, "not a zone of the model");
+        assert_eq!(p.frame(m, &[38, 39, 47]).unwrap(), vec![(38, [9, 0, 0]), (39, [1, 1, 1])]);
+        assert!(p.frame(m, &[39]).unwrap_err().contains("zone 38"));
+        assert!(p.check_zones(m).is_ok());
+        p.zones.insert(250, [1, 2, 3]);
+        assert!(p.check_zones(m).unwrap_err().contains("250"));
+    }
+
+    #[test]
+    fn names_and_paths() {
+        crate::testenv::init();
+        for ok in ["Evening", "Arrow keys", "a-b_c 1", &"x".repeat(64)] {
+            assert!(valid_name(ok), "{ok:?}");
+        }
+        for bad in ["", " lead", "trail ", "a/b", "a.b", "Café", &"x".repeat(65)] {
+            assert!(!valid_name(bad), "{bad:?}");
+            assert!(path(bad).is_err());
+        }
+        assert!(path("Evening").unwrap().ends_with("loginux/profiles/Evening.toml"));
+        assert!(config_dir().starts_with(crate::testenv::init()));
+    }
+
+    #[test]
+    fn load_arg_takes_a_name_or_a_file() {
+        let m = g316();
+        let file = crate::testenv::init().join("loose.toml");
+        fs::write(&file, "[keys]\nesc = \"#00ff00\"\n").unwrap();
+        assert_eq!(load_arg(m, file.to_str().unwrap()).unwrap().zones[&38], [0, 255, 0]);
+        assert_eq!(load_arg(m, "Wave").unwrap().effect.map(|e| e.kind), Some(Fx::Wave));
+        assert!(load_arg(m, "/nonexistent/x.toml").is_err());
+    }
+
+    #[test]
+    fn channel_checks_round_trip() {
+        crate::testenv::init();
+        let m = layout::find("test-pad").expect("the user definition from testenv");
+        assert!(load_checks(m).is_empty());
+        let mut seen = BTreeMap::new();
+        seen.insert(0, Seen { saw: "glow".into(), date: "2026-10-22".into() });
+        save_checks(m, &seen).unwrap();
+        let back = load_checks(m);
+        assert_eq!((back[&0].saw.as_str(), back[&0].date.as_str()), ("glow", "2026-10-22"));
+        assert!(checks_path(m).ends_with("checks/test-pad.toml"));
+        fs::write(checks_path(m), "not = [toml").unwrap();
+        assert!(load_checks(m).is_empty(), "a broken file reads as no answers");
+    }
+
+    #[test]
+    fn colours_parse_and_print() {
+        assert_eq!(parse_rgb("#ABCDEF").unwrap(), [0xab, 0xcd, 0xef]);
+        assert_eq!(parse_rgb("102030").unwrap(), [0x10, 0x20, 0x30]);
+        for bad in ["#abcd", "zzzzzz", "#1234567", ""] {
+            assert!(parse_rgb(bad).is_err(), "{bad:?}");
+        }
+        assert_eq!(hex([0xff, 0x2e, 0x3f]), "#ff2e3f");
+    }
+
+    #[test]
+    fn today_is_a_date() {
+        let d = today();
+        let parts: Vec<u32> = d.split('-').map(|p| p.parse().unwrap()).collect();
+        assert!(parts[0] >= 2026 && (1..=12).contains(&parts[1]) && (1..=31).contains(&parts[2]), "{d}");
     }
 }
