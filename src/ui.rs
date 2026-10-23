@@ -829,12 +829,16 @@ impl App {
                 } else {
                     ""
                 };
-                if self.profile_box(ui, name, is_open, mark).clicked() && !is_open {
-                    if self.dirty() {
-                        self.confirm = Some(Confirm::Switch(name.clone()));
-                    } else {
-                        self.open_profile(name);
-                        self.selection.clear();
+                // A profile opens in the editor, from SETTINGS or the channel check as well.
+                if self.profile_box(ui, name, is_open, mark).clicked() {
+                    self.tab = Tab::Edit;
+                    if !is_open {
+                        if self.dirty() {
+                            self.confirm = Some(Confirm::Switch(name.clone()));
+                        } else {
+                            self.open_profile(name);
+                            self.selection.clear();
+                        }
                     }
                 }
             }
@@ -2649,7 +2653,12 @@ mod tests {
         assert!(w.app.set.is_none());
         w.click("BACK TO SETTINGS");
         assert!(w.app.tab == Tab::Settings);
-        w.click("EDIT");
+        w.click("T tabs");
+        assert!(w.app.tab == Tab::Edit, "the open profile's editor, from SETTINGS");
+        w.click("SETTINGS");
+        w.click("Breathing");
+        assert!(w.app.tab == Tab::Edit && w.app.open.as_deref() == Some("Breathing"), "another profile opens in the editor");
+        w.click("T tabs");
         w.app.notice = Some(("Something to read".into(), AMBER));
         w.run(1);
         w.click("OK");
