@@ -1713,7 +1713,10 @@ impl App {
                     px_text(p, r.min + vec2(4.0, 4.0), legend, LEGEND, ink);
                 }
             }
-            if checking && let Some(seen) = self.checks.get(&z.id) {
+            // Proof belongs to the channel check; `checking` also covers an effect's board in EDIT.
+            if self.tab == Tab::Check
+                && let Some(seen) = self.checks.get(&z.id)
+            {
                 let ok = seen.saw == z.name;
                 let m = whole(3.0 * ppp) / ppp;
                 let at = if z.kind == Kind::Strip { pos2(r.center().x - m / 2.0, r.max.y + 3.0) } else { pos2(r.max.x - m - 3.0, r.max.y - m - 3.0) };
@@ -2796,6 +2799,41 @@ mod tests {
         ok_use_none(&mut w);
         profile::delete("T drag").unwrap();
         forget_claims();
+    }
+
+    /// The proof marks one frame paints: green or amber squares of 3 points.
+    fn proof_marks(w: &mut Window) -> usize {
+        fn count(shapes: &[egui::Shape]) -> usize {
+            shapes
+                .iter()
+                .map(|s| match s {
+                    egui::Shape::Vec(inner) => count(inner),
+                    egui::Shape::Rect(r) if (r.fill == GREEN || r.fill == AMBER) && (r.rect.width() - 3.0).abs() < 0.5 => 1,
+                    _ => 0,
+                })
+                .sum()
+        }
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1360.0, 840.0))), ..Default::default() };
+        let (app, frame) = (&mut w.app, &mut w.frame);
+        let mut out = w.ctx.run_ui(input, |ui| app.ui(ui, frame));
+        out.textures_delta.clear();
+        count(&out.shapes.into_iter().map(|c| c.shape).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn proof_marks_show_in_the_channel_check_only() {
+        let _serial = crate::testenv::serial();
+        let mut w = Window::open();
+        w.app.checks.insert(38, Seen { saw: "esc".into(), date: "2026-10-23".into() });
+        w.app.checks.insert(39, Seen { saw: "nothing".into(), date: "2026-10-23".into() });
+        for profile in ["Breathing", "Wave"] {
+            w.click(profile);
+            w.run(1);
+            assert_eq!(proof_marks(&mut w), 0, "no proof while editing {profile}");
+        }
+        w.app.tab = Tab::Check;
+        w.run(1);
+        assert_eq!(proof_marks(&mut w), 2, "one mark per checked zone in the check");
     }
 
     fn forget_claims() {
