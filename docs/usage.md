@@ -81,7 +81,7 @@ handing the lighting back.
 | `loginux apply NAME [--hold S \| --keep]` | Paints a profile for S seconds (default 10), then hands back |
 | `loginux paint esc=ff0000 bar3=00ff00 [--base RRGGBB]` | Paints single zones; takes the same `--hold`/`--keep` |
 | `loginux release` | Hands the lighting back to the keyboard now |
-| `loginux rate [HZ]` | Shows the report rate, or changes it and reads it back (the keyboard may reconnect) |
+| `loginux rate [HZ]` | Shows the report rate, or changes it, reads it back and keeps it (the keyboard may reconnect) |
 | `loginux run [--refresh S]` | The engine: keeps the profile applied; the service runs this |
 | `loginux probe --device /dev/hidrawN` | Read-only: prints a starting definition for a new keyboard |
 
@@ -150,22 +150,24 @@ every ten seconds after.
 | Report rate (`0x8061`) | Shows the current rate and the rates the keyboard supports. Changes it only when you ask. | Changed on Linux to 2000, 4000 and 8000 Hz and read back |
 | Volume knob | Nothing: the knob sends ordinary media keys, which Linux handles. | Seen on Windows |
 
-A report-rate change can make the keyboard leave the USB bus and come back:
-the G316 X 98 did under Windows, and did not for 4000 and 8000 Hz under
-Linux. Loginux sends the new rate once and never retries it, waits up to 20 s
-for the keyboard if it leaves, reads the rate back, and repaints the chosen
-profile. If the keyboard does not return or reports another rate, the editor
-and the command line say so. On a keyboard with profile management
-(`0x8101`), Loginux switches it to host mode for the write and back to
-onboard mode right after, the switch Solaar makes when it claims and releases
-a device; G HUB makes the same host switch before its rate writes. The
-keyboard keeps the new rate until it reconnects, then runs at its own rate
-again (1000 Hz on the G316 X 98), and Loginux does not send the rate again. A
-rate the keyboard still refuses is marked and not offered again (kept in
-`~/.config/loginux/rates/`; delete that file to try it once more). Brightness
-and game-mode changes are not offered: their commands on the G316 are not
-verified. [G316 extra controls](../research/g316-extra-controls.md) has the
-evidence.
+A report-rate change can make the keyboard leave the USB bus and come back: the
+G316 X 98 did under Windows, and did not for 4000 and 8000 Hz under Linux.
+Loginux sends the new rate once, waits up to 20 s for the keyboard if it
+leaves, reads the rate back, and repaints the chosen profile; a change that
+fails is not tried again. If the keyboard does not return or reports another
+rate, the editor and the command line say so. On a keyboard with profile
+management (`0x8101`), Loginux switches it to host mode for the write and back
+to onboard mode right after, the switch Solaar makes when it claims and
+releases a device; G HUB makes the same host switch before its rate writes. The
+keyboard forgets the rate when it reconnects and comes back at its own (1000 Hz
+on the G316 X 98). So, like G HUB, Loginux keeps the rate you chose and sends
+it again when the keyboard connects at another rate: at most three times in ten
+minutes, and never a rate the keyboard refused. Choosing the keyboard's own
+rate stops the writes. A rate the keyboard still refuses is marked and not
+offered again (kept in `~/.config/loginux/rates/`; delete that file to try it
+once more). Brightness and game-mode changes are not offered: their commands on
+the G316 are not verified.
+[G316 extra controls](../research/g316-extra-controls.md) has the evidence.
 
 ## Run at login
 
@@ -245,7 +247,7 @@ socket there.
 - `~/.config/loginux/profiles/*.toml`: profiles
 - `~/.config/loginux/config.toml`: the chosen profile and the keyboard last seen
 - `~/.config/loginux/checks/KEYBOARD.toml`: channel-check answers per keyboard model
-- `~/.config/loginux/rates/KEYBOARD.toml`: report rates this keyboard refused (delete to offer them again)
+- `~/.config/loginux/rates/KEYBOARD.toml`: the report rate you chose for this keyboard (`keep`) and the rates it refused; delete it to forget both
 - `~/.config/loginux/devices/*.toml`: your own device definitions; one with
   a built-in's ID replaces it
 - `$XDG_RUNTIME_DIR/loginux/`: lock, socket and claim record (cleared at logout)

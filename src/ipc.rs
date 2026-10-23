@@ -76,6 +76,10 @@ pub struct Controls {
     /// write), so they are shown as refused rather than as working options.
     #[serde(default)]
     pub report_rate_refused: Vec<u32>,
+    /// The rate the user chose, which the engine sends again whenever the
+    /// keyboard reconnects at another rate (the keyboard does not save it).
+    #[serde(default)]
+    pub report_rate_kept: Option<u32>,
     /// Game mode (0x4523), read only: it changes with the keyboard's own key.
     pub game_mode: Option<bool>,
 }

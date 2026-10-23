@@ -1306,7 +1306,9 @@ impl App {
         let game = controls.game_mode.map_or("NOT REPORTED", |on| if on { "ON" } else { "OFF" });
         row(ui, "GAME MODE", game, "Read only; the keyboard's game-mode key sets it");
         let rate = controls.report_rate.map_or("NOT REPORTED".into(), |hz| format!("{hz} HZ"));
-        row(ui, "REPORT RATE", &rate, "Changing it makes the keyboard reconnect");
+        let kept = controls.report_rate_kept.filter(|k| !controls.report_rate_refused.contains(k));
+        let note = kept.map_or_else(|| "Changes only when you choose a rate".into(), |k| format!("Set back to {k} Hz after every reconnect"));
+        row(ui, "REPORT RATE", &rate, &note);
         row(ui, "VOLUME KNOB", "MEDIA KEYS", "Linux handles volume and mute itself");
 
         if !controls.report_rates.is_empty() {
@@ -1335,7 +1337,7 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 body(
                     ui,
-                    format!("Change the report rate to {hz} Hz? The keyboard disconnects and comes back, and Loginux paints its lighting again."),
+                    format!("Change the report rate to {hz} Hz? The keyboard may disconnect and come back. Loginux keeps this rate and sets it again whenever the keyboard reconnects, as G HUB does."),
                     AMBER,
                     13.0,
                 );
@@ -1363,8 +1365,8 @@ impl App {
         for text in [
             "Loginux reads these from the keyboard each time it connects and every ten seconds after.",
             "Brightness and game mode are read only until their commands are verified on this keyboard.",
-            "A report-rate change is sent once, only when you confirm it. Loginux then reads the rate back, waiting for the keyboard if it reconnects; it never sends a rate on its own.",
-            "For the change, Loginux switches the keyboard's profile management to host mode, as G HUB does, and back to onboard mode right after. The keyboard keeps the rate until it reconnects, then runs at its own rate again.",
+            "A report-rate change is sent when you confirm it, and Loginux reads the rate back, waiting for the keyboard if it reconnects. The keyboard forgets the rate when it reconnects, so Loginux sends the rate you chose again then, as G HUB does; at most three times in ten minutes.",
+            "For each change, Loginux switches the keyboard's profile management to host mode, as G HUB does, and back to onboard mode right after.",
         ] {
             body(ui, text, TEXT2, 13.0);
             ui.add_space(6.0);
@@ -2874,7 +2876,7 @@ mod tests {
         forget_claims();
         profile::set_active(None).unwrap();
         let _ = std::fs::remove_file(profile::checks_path(g316()));
-        let _ = std::fs::remove_file(profile::refused_rates_path(g316()));
+        let _ = std::fs::remove_file(profile::rates_path(g316()));
         scratch_profile("T live", [255, 0, 0]);
         let kb = crate::fake::plug("/dev/fake-ui", "g316-x-98", crate::fake::g316());
         let mut w = Window::hosting(Some("/dev/fake-ui"));
@@ -2945,6 +2947,7 @@ mod tests {
         // Device settings, and a report-rate change: cancelled, confirmed, then refused.
         w.click("DEVICE");
         w.run(1);
+        assert!(w.has("Changes only when you choose a rate"), "nothing kept yet");
         w.click("2000 HZ");
         w.click("CANCEL");
         assert!(w.app.rate_confirm.is_none());
@@ -2952,6 +2955,7 @@ mod tests {
         w.click("CHANGE RATE");
         w.until("the change waits for the keyboard", |w| w.has("Waiting for the keyboard to confirm 2000 Hz\u{2026}"));
         w.until("the rate reads back", |w| w.has("Report rate read back as 2000 Hz."));
+        w.until("the rate is kept", |w| w.has("Set back to 2000 Hz after every reconnect"));
         kb.state().refuse_rate = Some((5, 2));
         w.click("4000 HZ");
         w.click("CHANGE RATE");
@@ -2969,7 +2973,7 @@ mod tests {
         ok_use_none(&mut w);
         profile::delete("T live").unwrap();
         let _ = std::fs::remove_file(profile::checks_path(g316()));
-        let _ = std::fs::remove_file(profile::refused_rates_path(g316()));
+        let _ = std::fs::remove_file(profile::rates_path(g316()));
         forget_claims();
     }
 

@@ -331,28 +331,45 @@ pub fn today() -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// Rates a device refused (HID++ error on the write), kept per model so the
-/// editor does not offer them again after a reconnect or a login.
-pub fn refused_rates_path(model: &Model) -> PathBuf {
+/// Report rates remembered per model: the rate the user chose, which the engine
+/// sends again when the keyboard reconnects at another rate (the keyboard does
+/// not save it), and rates the device refused (HID++ error on the write), which
+/// the editor does not offer again.
+pub fn rates_path(model: &Model) -> PathBuf {
     config_dir().join("rates").join(format!("{}.toml", model.id))
 }
 
+fn rates_file(model: &Model) -> toml::Table {
+    fs::read_to_string(rates_path(model)).ok().and_then(|t| t.parse().ok()).unwrap_or_default()
+}
+
+pub fn load_kept_rate(model: &Model) -> Option<u32> {
+    rates_file(model).get("keep").and_then(|v| v.as_integer()).and_then(|n| u32::try_from(n).ok())
+}
+
 pub fn load_refused_rates(model: &Model) -> Vec<u32> {
-    let doc: toml::Table = fs::read_to_string(refused_rates_path(model)).ok().and_then(|t| t.parse().ok()).unwrap_or_default();
-    doc.get("refused")
+    rates_file(model)
+        .get("refused")
         .and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|x| x.as_integer().map(|n| n as u32)).collect())
         .unwrap_or_default()
 }
 
-pub fn save_refused_rates(model: &Model, rates: &[u32]) -> Result<(), String> {
-    let list = rates.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
+pub fn save_rates(model: &Model, keep: Option<u32>, refused: &[u32]) -> Result<(), String> {
+    let list = refused.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
+    let keep = keep.map_or_else(String::new, |hz| format!("keep = {hz}\n"));
     let text = format!(
-        "# Report rates the {} listed but refused over Linux (HID++ error on the write).\n\
-         # Delete this file to offer them again.\n\nrefused = [{list}]\n",
+        "# Report rates for the {}. keep: the rate chosen in Loginux, sent again when\n\
+         # the keyboard reconnects at another rate. refused: rates it listed but refused\n\
+         # over Linux (HID++ error on the write). Delete this file to forget both.\n\n{keep}refused = [{list}]\n",
         model.name
     );
-    write_atomic(&refused_rates_path(model), &text)
+    write_atomic(&rates_path(model), &text)
+}
+
+/// Keeps a rate chosen while no engine runs; the refused list stays as it is.
+pub fn set_kept_rate(model: &Model, hz: u32) -> Result<(), String> {
+    save_rates(model, Some(hz), &load_refused_rates(model))
 }
 
 fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
@@ -430,16 +447,21 @@ mod tests {
     }
 
     #[test]
-    fn refused_rates_round_trip_per_model() {
+    fn report_rates_round_trip_per_model() {
         let _serial = crate::testenv::serial();
         let m = g316();
-        let _ = fs::remove_file(refused_rates_path(m));
-        assert!(load_refused_rates(m).is_empty(), "none by default");
-        save_refused_rates(m, &[2000, 8000]).unwrap();
-        assert_eq!(load_refused_rates(m), [2000, 8000]);
-        save_refused_rates(m, &[]).unwrap();
-        assert!(load_refused_rates(m).is_empty());
-        fs::remove_file(refused_rates_path(m)).unwrap();
+        let _ = fs::remove_file(rates_path(m));
+        assert_eq!((load_kept_rate(m), load_refused_rates(m)), (None, vec![]), "nothing by default");
+        save_rates(m, None, &[2000, 8000]).unwrap();
+        assert_eq!((load_kept_rate(m), load_refused_rates(m)), (None, vec![2000, 8000]));
+        set_kept_rate(m, 4000).unwrap();
+        assert_eq!((load_kept_rate(m), load_refused_rates(m)), (Some(4000), vec![2000, 8000]), "the refused list stays");
+        assert!(fs::read_to_string(rates_path(m)).unwrap().ends_with("Delete this file to forget both.\n\nkeep = 4000\nrefused = [2000, 8000]\n"));
+        save_rates(m, Some(4000), &[]).unwrap();
+        assert_eq!((load_kept_rate(m), load_refused_rates(m)), (Some(4000), vec![]));
+        fs::write(rates_path(m), "keep = -1\n").unwrap();
+        assert_eq!(load_kept_rate(m), None, "a negative rate is not a rate");
+        fs::remove_file(rates_path(m)).unwrap();
     }
 
     #[test]

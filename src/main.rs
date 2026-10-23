@@ -206,7 +206,9 @@ fn controls_text(c: &Controls) -> String {
     let rate = match c.report_rate {
         Some(hz) => {
             let refused = if c.report_rate_refused.is_empty() { String::new() } else { format!(" ({} refused by the keyboard)", list(&c.report_rate_refused)) };
-            format!("{hz} Hz; supports {}{refused}", list(&c.report_rates))
+            let kept = c.report_rate_kept.filter(|k| !c.report_rate_refused.contains(k));
+            let kept = kept.map_or_else(String::new, |k| format!("; Loginux sets it back to {k} Hz after a reconnect"));
+            format!("{hz} Hz; supports {}{refused}{kept}", list(&c.report_rates))
         }
         None => "not reported".into(),
     };
@@ -499,6 +501,7 @@ fn rate(device: Option<PathBuf>, args: &[String]) -> Result<(), String> {
         .filter(|i| supported.contains(i))
         .ok_or_else(|| format!("{hz} Hz is not a rate this keyboard reports"))?;
     if index == current {
+        let _ = profile::set_kept_rate(kb.model, hz);
         println!("report rate is already {hz} Hz");
         return Ok(());
     }
@@ -515,6 +518,7 @@ fn rate(device: Option<PathBuf>, args: &[String]) -> Result<(), String> {
             let (_, rates) = engine::read_controls(&mut kb).map_err(e)?;
             return match rates.map(|r| r.1) {
                 Some(i) if i == index => {
+                    let _ = profile::set_kept_rate(kb.model, hz);
                     println!("report rate is now {hz} Hz (read back from the keyboard)");
                     Ok(())
                 }
@@ -815,10 +819,13 @@ mod tests {
         let at = "/dev/fake-rate";
         let rate = |hz: &str| run(&format!("rate {hz} --device {at}"));
         let plug = |id: &str| fake::plug(at, id, if id == "g903-hero" { fake::g903() } else { fake::g316() });
+        let g316 = layout::find("g316-x-98").unwrap();
+        let _ = std::fs::remove_file(profile::rates_path(g316));
         let _kb = plug("g316-x-98");
         rate("").unwrap();
         let _kb = plug("g316-x-98");
         rate("1000").unwrap(); // already
+        assert_eq!(profile::load_kept_rate(g316), Some(1000), "the choice is kept even with no write");
         let _kb = plug("g316-x-98");
         assert!(rate("1234").unwrap_err().contains("not a rate this keyboard reports"));
         let _mouse = plug("g903-hero");
@@ -830,6 +837,7 @@ mod tests {
         let (_before, after) = (plug("g316-x-98"), plug("g316-x-98"));
         after.state().rate = 4;
         rate("2000").unwrap();
+        assert_eq!(profile::load_kept_rate(g316), Some(2000), "kept for the engine to set again");
         let (_before, _after) = (plug("g316-x-98"), plug("g316-x-98"));
         assert!(rate("2000").unwrap_err().contains("reports rate index 3"));
         let (_before, _after) = (plug("g316-x-98"), plug("g903-hero"));
@@ -837,6 +845,7 @@ mod tests {
         let _before = plug("g316-x-98");
         assert!(rate("2000").unwrap_err().contains("did not come back"));
         busy("rate");
+        let _ = std::fs::remove_file(profile::rates_path(g316));
     }
 
     #[test]
@@ -892,7 +901,14 @@ mod tests {
             message: Some("hello".into()),
             pid: 42,
             hosted: true,
-            controls: Some(Controls { brightness: Some([100, 100]), report_rate: Some(1000), report_rates: vec![1000, 8000], report_rate_refused: vec![8000], game_mode: Some(true) }),
+            controls: Some(Controls {
+                brightness: Some([100, 100]),
+                report_rate: Some(1000),
+                report_rates: vec![1000, 2000, 8000],
+                report_rate_refused: vec![8000],
+                report_rate_kept: Some(2000),
+                game_mode: Some(true),
+            }),
             rate_change: Some(RateChange::Failed { hz: 8000, error: "refused".into() }),
         };
         let text = describe(&s);
@@ -901,7 +917,7 @@ mod tests {
             "lighting: showing profile \"Test\"",
             "engine: pid 42 inside an editor window",
             "brightness: 100 of 100 (read only)",
-            "report rate: 1000 Hz; supports 1000, 8000 (8000 refused by the keyboard)",
+            "report rate: 1000 Hz; supports 1000, 2000, 8000 (8000 refused by the keyboard); Loginux sets it back to 2000 Hz after a reconnect",
             "game mode: on (read only)",
             "report-rate change to 8000 Hz failed: refused",
             "last message: hello",
