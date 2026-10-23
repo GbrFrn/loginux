@@ -27,7 +27,8 @@ protocol backend; see the last section.
    keyboard usage minus 3, and the modifiers are 104 to 111. The positions are
    a placeholder grid.
 
-3. **Check every zone on the keyboard.** Run `loginux`, open CHANNEL CHECK and
+3. **Check every zone on the keyboard.** Run `loginux`, open SETTINGS, then OPEN
+   CHANNEL CHECK, and
    check all keys and the unknown zones. Loginux lights one zone at a time;
    click the key that lit, or answer NOTHING LIT or NOT ON THE MAP. Then fix
    the file: rename keys that lit somewhere else, move zones that lit a

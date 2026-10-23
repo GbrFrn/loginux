@@ -209,10 +209,10 @@ Near-black greys for structure, LED colour for content, and three signals that n
 **Character:** Silkscreen is a 5-row capital bitmap drawn cell by cell, so it reads as hardware type, the same voice as the keyboard's dot screen. Archivo is a plain grotesque that keeps sentences legible beside it. Silkscreen is set in caps only. Its one-cell side bearings are trimmed so ink sizes are exact.
 
 ### Hierarchy
-- **Title** (Silkscreen Bold, 6pt cell, 30pt cap): the open profile's name and the CHANNEL CHECK heading in the centre column.
+- **Title** (Silkscreen Bold, 6pt cell, 30pt cap): the open profile's name, and the SETTINGS and CHANNEL CHECK headings, in the centre column.
 - **Brand** (Silkscreen Bold, 4pt cell, 20pt cap): the LOGINUX wordmark at the header's left.
 - **Hex** (Silkscreen Bold, 4pt cell, 20pt cap): the selection's hex value, or NONE or MIXED, and the zone number during a check.
-- **Tab** (Silkscreen Regular, 2pt cell, 10pt cap): EDIT and CHANNEL CHECK in the header.
+- **Tab** (Silkscreen Regular, 2pt cell, 10pt cap): EDIT and SETTINGS in the header. The channel check opens from SETTINGS, which stays underlined while it runs.
 - **Label** (Silkscreen Bold, 1.5pt cell, 7.5pt cap): button labels and control-group labels.
 - **Small** (Silkscreen Regular, 1.5pt cell, 7.5pt cap): profile names, status words, meta and proof lines, research-zone numbers.
 - **Legend** (Silkscreen Regular, 1pt cell, 5pt cap): key legends, inset 4pt from the key's top-left.

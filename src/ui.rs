@@ -389,8 +389,10 @@ fn service_state() -> Service {
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
     Edit,
+    /// Device settings, and the way into the channel check.
+    Settings,
+    /// The channel check, opened from Settings, under the SETTINGS tab.
     Check,
-    Device,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -732,12 +734,12 @@ impl App {
         px_text(&p, pos2(r.min.x + 22.0, r.center().y - brand.y / 2.0), "LOGINUX", BRAND, TEXT);
 
         let mut x = r.min.x + 22.0 + brand.x + 36.0;
-        for (tab, name) in [(Tab::Edit, "EDIT"), (Tab::Check, "CHANNEL CHECK"), (Tab::Device, "DEVICE")] {
+        for (tab, name) in [(Tab::Edit, "EDIT"), (Tab::Settings, "SETTINGS")] {
             let size = px_size(name, TAB, ppp);
             let hit = Rect::from_min_max(pos2(x - 8.0, r.min.y), pos2(x + size.x + 8.0, r.max.y));
             let resp = ui.interact(hit, ui.scope_id().with(name), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Tab, true, name));
-            let on = self.tab == tab;
+            let on = self.tab == tab || (tab == Tab::Settings && self.tab == Tab::Check);
             let ink = if on || resp.hovered() { TEXT } else { LABEL };
             px_text(&p, pos2(x, r.center().y - size.y / 2.0), name, TAB, ink);
             if on {
@@ -934,7 +936,7 @@ impl App {
         if self.tab == Tab::Check {
             return self.check_results(ui);
         }
-        if self.tab == Tab::Device {
+        if self.tab == Tab::Settings {
             return self.device_notes(ui);
         }
         if self.open.is_some() && self.work.effect.is_some() {
@@ -1326,15 +1328,37 @@ impl App {
         match self.tab {
             Tab::Edit => self.edit(ui),
             Tab::Check => self.check(ui),
-            Tab::Device => self.device(ui),
+            Tab::Settings => self.settings(ui),
         }
     }
 
     // ---- device settings ------------------------------------------------------------
 
-    fn device(&mut self, ui: &mut Ui) {
-        label(ui, "DEVICE", TITLE, TEXT);
+    /// Settings, set apart from the editor: the device's own settings, then a
+    /// way into the channel check, which is calibration rather than editing.
+    fn settings(&mut self, ui: &mut Ui) {
+        label(ui, "SETTINGS", TITLE, TEXT);
+        ui.add_space(18.0);
+        label(ui, "DEVICE", LABEL_PX, LABEL);
         ui.add_space(6.0);
+        self.device(ui);
+        ui.add_space(14.0);
+        rule(ui);
+        ui.add_space(14.0);
+        label(ui, "CHANNEL CHECK", LABEL_PX, LABEL);
+        ui.add_space(6.0);
+        body(ui, "Lights one zone at a time, so you can confirm where each key and light-bar segment really is.", TEXT2, 14.0);
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            if button(ui, "OPEN CHANNEL CHECK", Look::Outline, true).clicked() {
+                self.tab = Tab::Check;
+            }
+            ui.add_space(6.0);
+            label(ui, &self.checked(), SMALL, LABEL);
+        });
+    }
+
+    fn device(&mut self, ui: &mut Ui) {
         let Some(Device::Connected { name, path, protocol, .. }) = self.status().map(|s| s.device.clone()) else {
             body(ui, "Connect the keyboard to read its settings.", TEXT2, 14.0);
             return;
@@ -1442,14 +1466,11 @@ impl App {
         }
     }
 
-    fn edit(&mut self, ui: &mut Ui) {
-        let title = self.open.clone().unwrap_or_else(|| "NO PROFILE".into()).to_uppercase();
-        label(ui, &title, TITLE, TEXT);
-        ui.add_space(4.0);
+    /// How much of the map the channel check has confirmed, as the meta line says it.
+    fn checked(&self) -> String {
         let model = self.model;
         let mapped = model.zones.iter().filter(|z| z.kind != Kind::Unknown).count();
         let checked = self.checks.iter().filter(|(id, _)| model.zone(**id).is_some_and(|z| z.kind != Kind::Unknown)).count();
-        let live = matches!(self.status().map(|s| &s.control), Some(Control::Preview));
         let strips: String = model
             .strips
             .iter()
@@ -1458,9 +1479,19 @@ impl App {
                 format!(" \u{00b7} {} ORDER {}", s.title.to_uppercase(), if done { "CHECKED" } else { "UNCHECKED" })
             })
             .collect();
+        format!("{checked}/{mapped} CHECKED{strips}")
+    }
+
+    fn edit(&mut self, ui: &mut Ui) {
+        let title = self.open.clone().unwrap_or_else(|| "NO PROFILE".into()).to_uppercase();
+        label(ui, &title, TITLE, TEXT);
+        ui.add_space(4.0);
+        let model = self.model;
+        let live = matches!(self.status().map(|s| &s.control), Some(Control::Preview));
         let meta = format!(
-            "{}{checked}/{mapped} CHECKED{strips}{}",
+            "{}{}{}",
             if live { "LIVE \u{00b7} " } else { "" },
+            self.checked(),
             if self.dirty() { " \u{00b7} UNSAVED" } else { "" }
         );
         label(ui, &meta, SMALL, if self.dirty() { TEXT } else { LABEL });
@@ -1670,7 +1701,14 @@ impl App {
     // ---- channel check ----------------------------------------------------------------
 
     fn check(&mut self, ui: &mut Ui) {
-        label(ui, "CHANNEL CHECK", TITLE, TEXT);
+        ui.horizontal(|ui| {
+            label(ui, "CHANNEL CHECK", TITLE, TEXT);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if button(ui, "BACK TO SETTINGS", Look::Quiet, true).clicked() {
+                    self.tab = Tab::Settings;
+                }
+            });
+        });
         ui.add_space(6.0);
         let connected = self.connected_zones().is_some();
         let model = self.model;
@@ -1799,7 +1837,7 @@ impl App {
 /// after LOGINUX_SHOT_AFTER frames (default 30) and closes it the normal way.
 /// LOGINUX_SHOT_SELECT="23,1,19,4" preselects zones and LOGINUX_SHOT_PAINT=#rrggbb paints
 /// them; LOGINUX_SHOT_CONFIRM shows the unsaved-close question; LOGINUX_SHOT_SERVICE=off|on|changing
-/// stands in for systemd's answer; LOGINUX_SHOT_TAB=device opens the DEVICE tab
+/// stands in for systemd's answer; LOGINUX_SHOT_TAB=settings opens SETTINGS
 /// (LOGINUX_SHOT_CONFIRM_RATE=8000 shows the rate confirmation); LOGINUX_SHOT_TAB=check
 /// opens the channel check, and LOGINUX_SHOT_SET=strip starts a run on the first strip.
 #[cfg(feature = "screenshot")]
@@ -1819,8 +1857,8 @@ fn shot(app: &mut App, ctx: &egui::Context) {
         if std::env::var("LOGINUX_SHOT_CONFIRM").is_ok() {
             app.confirm = Some(Confirm::Close);
         }
-        if std::env::var("LOGINUX_SHOT_TAB").is_ok_and(|t| t == "device") {
-            app.tab = Tab::Device;
+        if std::env::var("LOGINUX_SHOT_TAB").is_ok_and(|t| t == "settings") {
+            app.tab = Tab::Settings;
             app.rate_confirm = std::env::var("LOGINUX_SHOT_CONFIRM_RATE").ok().and_then(|r| r.parse().ok());
         }
         if std::env::var("LOGINUX_SHOT_TAB").is_ok_and(|t| t == "check") {
@@ -2544,15 +2582,17 @@ mod tests {
         w.app.sync_picker();
         w.run(2);
         assert!(w.has("ALL KEYS") && w.has("LIGHT BAR") && w.has("keyboard map"));
-        w.click("CHANNEL CHECK");
+        w.click("SETTINGS");
+        assert!(w.app.tab == Tab::Settings && w.has("OPEN CHANNEL CHECK"));
+        w.click("OPEN CHANNEL CHECK");
         assert!(w.app.tab == Tab::Check && w.has("CHECK ALL KEYS") && !w.enabled("CHECK ALL KEYS"), "a check needs a connected device");
         w.app.set = Some(Set::Strip(0));
         w.run(2);
         assert!(w.has("NOTHING LIT") && w.has("STOP"));
         w.click("STOP");
         assert!(w.app.set.is_none());
-        w.click("DEVICE");
-        assert!(w.app.tab == Tab::Device);
+        w.click("BACK TO SETTINGS");
+        assert!(w.app.tab == Tab::Settings);
         w.click("EDIT");
         w.app.notice = Some(("Something to read".into(), AMBER));
         w.run(1);
@@ -2991,7 +3031,8 @@ mod tests {
         w.until("taken back", |w| matches!(control(w), Some(Control::Profile { .. })));
 
         // Channel check: answers by clicking where the light is, or by the buttons.
-        w.click("CHANNEL CHECK");
+        w.click("SETTINGS");
+        w.click("OPEN CHANNEL CHECK");
         let strip = w.app.model.strips[0].zones.clone();
         let at = w.find("CHECK LIGHT BAR").center();
         w.hover(at);
@@ -3035,7 +3076,7 @@ mod tests {
         w.click("OK");
 
         // Device settings, and a report-rate change: cancelled, confirmed, then refused.
-        w.click("DEVICE");
+        w.click("SETTINGS");
         w.run(1);
         assert!(w.has("Changes only when you choose a rate"), "nothing kept yet");
         w.click("2000 HZ");
@@ -3093,7 +3134,7 @@ mod tests {
         w.run(1);
         assert!(noticed(&w, "The connected keyboard is a Logitech G903 HERO"));
         assert!(w.has("WAVE") && !w.enabled("WAVE") && w.enabled("BREATHE"));
-        w.click("DEVICE");
+        w.click("SETTINGS");
         w.run(1);
         assert!(!w.nodes.iter().any(|n| n.label.ends_with(" HZ")), "no report rates to set on this mouse");
         profile::delete("T mouse").unwrap();

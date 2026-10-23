@@ -99,12 +99,12 @@ distinct from a watched Linux result.
 
 ## In Loginux
 
-- `loginux status` and the editor's DEVICE tab show brightness, game mode and
+- `loginux status` and the editor's SETTINGS page show brightness, game mode and
   the report rate when the keyboard reports them. Loginux resolves each
   feature by ID on every connection, reads it then and every two seconds,
   applies game-mode notifications as they arrive, and reads the brightness
   again at once on any `0x8040` notification.
-- `loginux rate HZ`, or a confirmed choice in the DEVICE tab, sends
+- `loginux rate HZ`, or a confirmed choice under SETTINGS, sends
   `0x8061/3` once, between `0x8101/6 [05]` and `[03]` on a keyboard that has
   `0x8101`. A lost reply is treated as unknown, not failure: Loginux
   waits up to 20 s for the keyboard to return, reads the rate back with

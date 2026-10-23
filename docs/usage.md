@@ -56,12 +56,12 @@ starts one inside the window, and that engine hands the lighting back when the
 window closes. To keep a profile after the window closes and at every login,
 turn on RUN AT LOGIN (it needs the service installed, see below).
 
-CHANNEL CHECK lights one zone at a time, white, with everything else dark. You
-click where the light appeared, or answer that nothing lit or that it lit
-somewhere not on the map. Answers go to
+The channel check, under SETTINGS (OPEN CHANNEL CHECK), lights one zone at a
+time, white, with everything else dark. You click where the light appeared, or
+answer that nothing lit or that it lit somewhere not on the map. Answers go to
 `~/.config/loginux/checks/KEYBOARD.toml` and show on the board as marks: green
-where the LED matched the map, amber where it did not. Until a zone is
-checked, its position is layout data and not proof.
+where the LED matched the map, amber where it did not. Until a zone is checked,
+its position is layout data and not proof.
 
 ## The tray icon
 
@@ -158,7 +158,7 @@ with none of it refuses the profile: the G903 has no wave or ripple.
 
 ## Device settings
 
-The editor's DEVICE tab and `loginux status` show settings the keyboard
+The editor's SETTINGS page and `loginux status` show settings the keyboard
 reports, when it reports them. Loginux reads them on every connection and
 every two seconds after, and at once when the keyboard says its brightness
 changed, for example from its knob.

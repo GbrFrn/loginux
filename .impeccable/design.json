@@ -349,8 +349,8 @@
       "name": "Header Tabs",
       "kind": "nav",
       "refersTo": "tab",
-      "description": "EDIT and CHANNEL CHECK; red underline on the active tab, resting on the 2px header rule.",
-      "html": "<nav class=\"ds-tabs\"><a class=\"ds-tab ds-tab-on\" href=\"#\">EDIT</a><a class=\"ds-tab\" href=\"#\">CHANNEL CHECK</a></nav>",
+      "description": "EDIT and SETTINGS; red underline on the active tab, resting on the 2px header rule. The channel check opens from SETTINGS, which stays underlined while it runs.",
+      "html": "<nav class=\"ds-tabs\"><a class=\"ds-tab ds-tab-on\" href=\"#\">EDIT</a><a class=\"ds-tab\" href=\"#\">SETTINGS</a></nav>",
       "css": ".ds-tabs { display: flex; gap: 34px; height: 64px; align-items: center; background: #0B0B0C; border-bottom: 2px solid #EDEDED; padding: 0 22px; } .ds-tab { font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-size: 13px; color: #8E8E94; text-decoration: none; height: 100%; display: flex; align-items: center; position: relative; } .ds-tab:hover { color: #EDEDED; } .ds-tab-on { color: #EDEDED; } .ds-tab-on::after { content: ''; position: absolute; left: -2px; right: -2px; bottom: 0; height: 4px; background: #FF2E3F; } .ds-tab:focus-visible { outline: 2px solid #FF2E3F; outline-offset: -4px; }"
     },
     {
