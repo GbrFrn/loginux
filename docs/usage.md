@@ -81,7 +81,7 @@ handing the lighting back.
 | `loginux apply NAME [--hold S \| --keep]` | Paints a profile for S seconds (default 10), then hands back |
 | `loginux paint esc=ff0000 bar3=00ff00 [--base RRGGBB]` | Paints single zones; takes the same `--hold`/`--keep` |
 | `loginux release` | Hands the lighting back to the keyboard now |
-| `loginux rate [HZ]` | Shows the report rate, or changes it and reads it back (the keyboard reconnects) |
+| `loginux rate [HZ]` | Shows the report rate, or changes it and reads it back (the keyboard may reconnect) |
 | `loginux run [--refresh S]` | The engine: keeps the profile applied; the service runs this |
 | `loginux probe --device /dev/hidrawN` | Read-only: prints a starting definition for a new keyboard |
 
@@ -147,18 +147,20 @@ every ten seconds after.
 | --- | --- | --- |
 | Lighting brightness (`0x8040`) | Shows the current value and the maximum. Read only. | Read on Linux |
 | Game mode (`0x4523`) | Shows on or off, and follows the keyboard's game-mode key. Read only. | Read on Linux |
-| Report rate (`0x8061`) | Shows the current rate and the rates the keyboard supports. Changes it only when you ask, and marks a rate the keyboard refuses. | Changed in G HUB on Windows; on Linux this firmware refused every change (error 2) |
+| Report rate (`0x8061`) | Shows the current rate and the rates the keyboard supports. Changes it only when you ask. | Changed on Linux to 2000, 4000 and 8000 Hz and read back |
 | Volume knob | Nothing: the knob sends ordinary media keys, which Linux handles. | Seen on Windows |
 
 A report-rate change makes the keyboard leave the USB bus and come back.
 Loginux sends the new rate once and never retries it, waits up to 20 s for
 the keyboard, reads the rate back, and repaints the chosen profile. If the
 keyboard does not return or reports another rate, the editor and the command
-line say so. On the G316 X 98 (firmware U186.01.B0007) every rate change was
-refused over Linux, including rates the keyboard lists; a refused rate is
-marked and not offered again (kept in `~/.config/loginux/rates/`; delete that
-file to try it once more). Changing the rate here would need the step G HUB
-performs on Windows, which a USB capture there would show. Brightness and
+line say so. On a keyboard with profile management (`0x8101`), Loginux
+switches it to host mode for the write and back to onboard mode right after,
+the switch Solaar makes when it claims and releases a device; G HUB makes the
+same host switch before its rate writes. The keyboard keeps the new rate until
+it reconnects, then runs at its own rate again (1000 Hz on the G316 X 98), and
+Loginux does not send the rate again. A rate the keyboard still refuses is marked and not offered again (kept in
+`~/.config/loginux/rates/`; delete that file to try it once more). Brightness and
 game-mode changes are not offered: their commands on the G316 are not
 verified. [G316 extra controls](../research/g316-extra-controls.md)
 has the evidence.
@@ -251,8 +253,11 @@ every key and bar segment where the definition puts it; the 8 unknown zones
 lit nothing. On CachyOS with Plasma 6.8 the package installed cleanly, the
 service's tray icon named the keyboard and its profile, and a left click on it
 opened the editor. Picked from the tray, the Wave and Breathing presets played
-on the keyboard. Not yet observed: re-enumeration after a report-rate change,
-and whether the keyboard keeps a rate across a replug.
+on the keyboard. On 2026-10-23 the report rate changed to 2000, 4000 and
+8000 Hz and read back each time; 8000 Hz then held for twelve minutes, through
+a lighting release and an engine restart. The keyboard re-enumerated once,
+about two and a half minutes after a change to 2000 Hz, and came back at
+1000 Hz. Not yet tried: a replug right after a rate change.
 [`research/`](../research/README.md) records the evidence and its labels.
 
 ## Credits

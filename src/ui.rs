@@ -1322,7 +1322,7 @@ impl App {
                         current_mark(ui, &text);
                     } else if refused {
                         button(ui, &format!("{text} \u{00b7} REFUSED"), Look::Quiet, false).on_hover_text(
-                            "The keyboard lists this rate but refused it (HID++ error 0x02). A Windows G HUB capture would show what it needs.",
+                            "The keyboard lists this rate but refused it (HID++ error 0x02). Delete this keyboard's file in ~/.config/loginux/rates/ to offer it again.",
                         );
                     } else if button(ui, &text, Look::Quiet, !busy).clicked() {
                         self.rate_confirm = Some(*hz);
@@ -1363,8 +1363,8 @@ impl App {
         for text in [
             "Loginux reads these from the keyboard each time it connects and every ten seconds after.",
             "Brightness and game mode are read only until their commands are verified on this keyboard.",
-            "A report-rate change is sent once, only when you confirm it. Loginux then waits for the keyboard to come back and reads the rate back; it never sends a rate on its own.",
-            "G HUB changed this keyboard's rate on Windows, but over Linux this firmware refused every rate change (error 2), including rates it lists, so a tried rate is marked refused. Changing the rate on Linux would need the step G HUB performs, which a Windows capture would show.",
+            "A report-rate change is sent once, only when you confirm it. Loginux then reads the rate back, waiting for the keyboard if it reconnects; it never sends a rate on its own.",
+            "For the change, Loginux switches the keyboard's profile management to host mode, as G HUB does, and back to onboard mode right after. The keyboard keeps the rate until it reconnects, then runs at its own rate again.",
         ] {
             body(ui, text, TEXT2, 13.0);
             ui.add_space(6.0);

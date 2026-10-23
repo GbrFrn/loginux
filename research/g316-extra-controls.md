@@ -14,7 +14,7 @@ are only identifiers for that firmware session.
 | Control | Evidence | Safe next use | Still unknown |
 | --- | --- | --- | --- |
 | Lighting brightness `0x8040` | **Live:** feature index 15; function 0 returned `00 64 05 03` (maximum 100, capability bytes `05 03`); function 1 returned `00 64` (current value 100). | Read and show the current value and reported maximum. | The G316 setter's request and persistence have not been established. Do not send a brightness write based on the getter layout. |
-| Report rate `0x8061` | **Live:** index 6; functions 0 and 1 reported bitmap `0x0078`; function 2 returned index 3 at 1000 Hz; G HUB on Windows set function 3 to 6 and function 2 read back 6. On Linux function 3 refused indices 4, 5 and 6 with error 2 (2026-10-23). **Static:** the cached handler accepts indices 3–6 in its ordinary path. | Read the current rate. Every change Loginux tried on Linux was refused, so it marks a refused rate and stops offering it as working. | Why the firmware refuses rate writes over Linux while G HUB changed the rate on Windows; a full G HUB capture (the preamble, not just the final write) would show any prerequisite. |
+| Report rate `0x8061` | **Live:** index 6; functions 0 and 1 reported bitmap `0x0078`; function 2 returned index 3 at 1000 Hz. Function 3 is refused with error 2 while `0x8101` profile management (index 16) is in the mode the keyboard starts in, and accepted after `0x8101/6 [05]`; Loginux set 2000, 4000 and 8000 Hz this way and read each back (2026-10-23). **Capture:** on every attach G HUB reads 1000 Hz, sends `0x8101/6 [05]`, then writes its rate. **Static:** Solaar sends `0x8101/6 [05]` when it claims a device and `[03]` when it releases it. | Change the rate on an explicit request: `[05]`, the rate write, `[03]`. | What `0x8101/6` controls beyond the rate; Solaar's comment calls `[05]` disabling firmware power management. What made the keyboard re-enumerate once after a 2000 Hz change. |
 | Game mode `0x4523` | **Live:** index 13; function 0 returned `00` while off; pressing the dedicated key produced `01` and `00` notifications. | Show current on/off state; update it on notifications or by re-reading after reconnect. | No G316 host toggle or per-key disable sequence has been validated. |
 | Knob and mute press | **Live:** interface 1 sends standard HID Consumer Control usages `0x00e9` (volume up) and `0x00ea` (volume down); pressing the knob mutes. | Document that Linux's HID input and sound stack already receive these events. | Knob mode changes and host remapping are separate work; Loginux has no reason to open the key-report interface for lighting. |
 | Consecutive-zone RGB `0x8081/5` | **Live, Windows:** G HUB sent up to three `(first zone, last zone, R, G, B)` records per long report and followed them with `0x8081/7` FrameEnd. The Esc-red capture included range `0x26–0x26`. | Optional transport optimization for runs of equal colors, after preserving `0x8081/1` as the proven Linux path. | Loginux has not used function 5 on Linux; it gives no new visible capability. |
@@ -30,23 +30,33 @@ engine must treat that disconnect as expected for an explicit change, then
 rediscover interface 2 and reapply any active RAM-only lighting profile. A
 failed reconnect is an error to show, not a reason to loop rate writes.
 
-On Linux this keyboard refused every report-rate change (live, 2026-10-23).
-Loginux sent `0x8061/3` with index 4 (2000 Hz), 5 (4000 Hz) and 6 (8000 Hz) —
-6 is the request G HUB sent — while the keyboard ran at 1000 Hz (index 3) on a
-480 Mbps link. Each reply was error 2, invalid argument, on the same
-connection: the keyboard did not disconnect or re-enumerate, so it is a clean
-rejection, not a link problem. Only 1000 Hz, the current index, is accepted,
-because Loginux sends no write when the requested index already matches. The
-bitmap keeps listing 1000/2000/4000/8000 as supported. The cause is unknown;
-the write path may need a prerequisite G HUB performs on Windows that is not in
-the single-write capture. Loginux records a refused rate for the connection,
-shows it as refused rather than as a working option, and never retries a rate
-write.
+The keyboard refuses a rate write while `0x8101` profile management is in
+the mode it starts in (live, 2026-10-23). In that mode `0x8061/3` with index 4,
+5 or 6 returned error 2 (invalid argument) at once, on the same connection, in
+short and long reports alike. The Windows capture shows what G HUB does each
+time the keyboard attaches: it reads `0x8101/6` (`[0f]` and `[00]`, reply
+`03 00 01`), sends `0x8101/6 [05]` (reply `00 00 01`), and only then writes the
+rate. Solaar sends `[05]` when it claims a device for software control and
+`[03]` when it releases it; on a device with `0x8100` it switches to host mode
+and back to onboard mode at those points instead. Loginux sends `[05]` before
+the rate write and `[03]` right after it. With that, the keyboard accepted
+2000, 4000 and 8000 Hz, and each read back after `[03]`. Loginux does not read
+`0x8101/6` back, so the claim that `[03]` restores the starting state rests on
+Solaar's pairing and on G HUB reading `03` at attach.
+
+The rate is not saved on the keyboard. An 8000 Hz rate held through a lighting
+release and an engine restart and was still set twelve minutes after the
+write. About two and a half minutes after a change to 2000 Hz the keyboard
+re-enumerated, cause not established, and came back at 1000 Hz. The Windows
+capture agrees: each time the keyboard attached it reported 1000 Hz, and G HUB
+wrote its chosen rate again. Loginux never sends a rate on its own, so after a
+reconnect the keyboard runs at 1000 Hz until the rate is changed again. Making
+a rate permanent would mean writing the onboard profile, which Loginux does
+not do.
 
 Rate selection must be an explicit user action. Do not put it in a lighting
 profile or send it automatically at startup, login, or after every replug.
-The current rate may be a saved device setting; its persistence has not been
-measured. Before a live Linux verification, record the current index and
+A reconnect undoes the rate, as described above. Before a live Linux verification, record the current index and
 agree on the intended value with the owner.
 
 ## Brightness and game mode
@@ -80,9 +90,10 @@ distinct from a watched Linux result.
   feature by ID on every connection, reads it then and every ten seconds,
   and applies game-mode notifications as they arrive.
 - `loginux rate HZ`, or a confirmed choice in the DEVICE tab, sends
-  `0x8061/3` once. A lost reply is treated as unknown, not failure: Loginux
+  `0x8061/3` once, between `0x8101/6 [05]` and `[03]` on a keyboard that has
+  `0x8101`. A lost reply is treated as unknown, not failure: Loginux
   waits up to 20 s for the keyboard to return, reads the rate back with
   `0x8061/2`, and repaints the chosen profile. Nothing sends a rate on its own.
 - Brightness and game mode have no writes.
-- As of 2026-10-22 Loginux has read these settings on Linux but has not sent
-  a report-rate change.
+- On 2026-10-23 Loginux changed the rate on Linux to 2000, 4000 and 8000 Hz
+  and read each one back. Brightness and game mode have only been read.

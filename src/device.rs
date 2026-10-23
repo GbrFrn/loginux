@@ -23,6 +23,11 @@ const LAYOUT: u16 = 0x4540;
 const FEATURE_SET: u16 = 0x0001;
 const COLOR_LED_EFFECTS: u16 = 0x8070;
 const ONBOARD_PROFILES: u16 = 0x8100;
+const PROFILE_MANAGEMENT: u16 = 0x8101;
+/// 0x8101 function 6 values, as Solaar sends them when it claims a device and
+/// when it releases it: host mode, and the mode the keyboard starts in.
+const PROFILES_HOST: u8 = 0x05;
+const PROFILES_ONBOARD: u8 = 0x03;
 const BRIGHTNESS: u16 = 0x8040;
 const REPORT_RATE: u16 = 0x8061;
 const GAME_MODE: u16 = 0x4523;
@@ -43,6 +48,7 @@ const ALLOWED: &[(u16, u8)] = &[
     (REPORT_RATE, 1), // getReportRateList: supported-rate bitmap
     (REPORT_RATE, 2), // getReportRate
     (REPORT_RATE, 3), // setReportRate: explicit user request only, never retried
+    (PROFILE_MANAGEMENT, 6), // host or onboard mode, around a rate change only; never profile memory
     (GAME_MODE, 0),   // getGameMode
     // `loginux probe` only, all getters:
     (FEATURE_SET, 0),       // getCount
@@ -86,6 +92,7 @@ struct Optional {
     brightness: Option<u8>,
     report_rate: Option<u8>,
     game_mode: Option<u8>,
+    profiles: Option<u8>,
 }
 
 /// Something the keyboard reported on its own, outside a request.
@@ -261,6 +268,7 @@ impl Keyboard {
             brightness: kb.feature(BRIGHTNESS)?,
             report_rate: kb.feature(REPORT_RATE)?,
             game_mode: kb.feature(GAME_MODE)?,
+            profiles: kb.feature(PROFILE_MANAGEMENT)?,
         };
         Ok(kb)
     }
@@ -445,7 +453,19 @@ impl Keyboard {
     /// caller reads the rate back instead of sending it again.
     pub fn set_report_rate(&mut self, rate_index: u8) -> Result<(), Error> {
         let index = self.optional.report_rate.ok_or(Error::Unsupported(REPORT_RATE))?;
-        self.call(REPORT_RATE, index, 3, &[rate_index]).map(drop)
+        // With 0x8101 profile management the write is refused (HID++ error 2) until
+        // the host takes over, as G HUB does before its rate writes. Control goes
+        // straight back to the firmware, as Solaar does on release; the new rate
+        // stays until the keyboard reconnects.
+        let profiles = self.optional.profiles;
+        if let Some(p) = profiles {
+            self.call(PROFILE_MANAGEMENT, p, 6, &[PROFILES_HOST])?;
+        }
+        let sent = self.call(REPORT_RATE, index, 3, &[rate_index]).map(drop);
+        if let Some(p) = profiles {
+            let _ = self.call(PROFILE_MANAGEMENT, p, 6, &[PROFILES_ONBOARD]); // fails harmlessly while re-enumerating
+        }
+        sent
     }
 
     /// 0x4523: game mode on or off.
@@ -608,7 +628,7 @@ mod tests {
     #[test]
     fn probe_reads_an_older_colour_led_device() {
         // No feature set and no 0x8071: 0x8070 colour LED effects only.
-        let spec = fake::Spec { features: vec![0x0000, 0x0003, 0x8070], clusters: vec![], nv: vec![], ext_caps: 0, multi: vec![], zones: vec![] };
+        let spec = fake::Spec { features: vec![0x0000, 0x0003, 0x8070], clusters: vec![], nv: vec![], ext_caps: 0, multi: vec![], rate_needs_host: false, zones: vec![] };
         let (io, _fake) = fake::transport(spec, 0xFF);
         let p = probe_on(io, Path::new("/dev/fake"), (0x046d, 0xc33f, 1, "Old".into())).unwrap();
         assert!(p.features.is_empty() && !p.rgb_effects && !p.per_key && p.zones.is_empty());
@@ -695,6 +715,42 @@ mod tests {
         spec.clusters[1].2.retain(|&id| id != STATIC);
         let (mut mouse, _fake) = fake::keyboard("g903-hero", spec);
         assert!(matches!(mouse.static_effects(), Err(Error::Reply(_, why)) if why == "cluster 1 has no Static effect"));
+    }
+
+    #[test]
+    fn a_rate_change_takes_host_mode_for_the_write_only() {
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        let index = kb.optional.report_rate.unwrap();
+        // Written straight, outside host mode: refused.
+        assert!(matches!(kb.call(REPORT_RATE, index, 3, &[4]), Err(Error::Device(_, 2))));
+        kb.set_report_rate(4).unwrap();
+        assert_eq!(fake.state().rate, 4);
+        assert!(!fake.state().profiles_host, "handed back to the firmware");
+        let order: Vec<(u16, u8, u8)> = fake
+            .state()
+            .log
+            .iter()
+            .filter(|r| r.0 == PROFILE_MANAGEMENT || (r.0 == REPORT_RATE && r.1 == 3))
+            .map(|r| (r.0, r.1, r.2[0]))
+            .collect();
+        let expected = [
+            (REPORT_RATE, 3, 4), // the refused direct write
+            (PROFILE_MANAGEMENT, 6, PROFILES_HOST),
+            (REPORT_RATE, 3, 4),
+            (PROFILE_MANAGEMENT, 6, PROFILES_ONBOARD),
+        ];
+        assert_eq!(order, expected);
+    }
+
+    #[test]
+    fn a_keyboard_without_profile_management_gets_no_profile_request() {
+        let mut spec = fake::g316();
+        spec.features.retain(|&f| f != PROFILE_MANAGEMENT);
+        spec.rate_needs_host = false;
+        let (mut kb, fake) = fake::keyboard("g316-x-98", spec);
+        kb.set_report_rate(5).unwrap();
+        assert_eq!(fake.state().rate, 5);
+        assert!(fake.requests(PROFILE_MANAGEMENT).is_empty());
     }
 
     #[test]

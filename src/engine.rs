@@ -540,6 +540,9 @@ impl Engine {
     /// Settles a pending rate change against what the keyboard now reports.
     fn rate_readback(&mut self, current: Option<u8>) {
         let Some(p) = self.rate_pending.take() else { return };
+        if current == Some(p.index) {
+            self.rate_works(p.hz);
+        }
         self.rate_change = Some(match current {
             Some(i) if i == p.index => {
                 log(&format!("report rate read back as {} Hz", p.hz));
@@ -552,6 +555,18 @@ impl Engine {
             }
             None => RateChange::Failed { hz: p.hz, error: "the keyboard did not report its rate after the change".into() },
         });
+    }
+
+    /// A rate the keyboard took is no longer refused, whatever an earlier
+    /// attempt recorded.
+    fn rate_works(&mut self, hz: u32) {
+        if let Some(link) = &mut self.link
+            && link.refused.contains(&hz)
+        {
+            link.refused.retain(|&r| r != hz);
+            let _ = profile::save_refused_rates(link.kb.model, &link.refused);
+            link.controls.report_rate_refused = link.refused.clone();
+        }
     }
 
     fn choose(&mut self, name: Option<String>) -> Result<(), String> {
@@ -1220,6 +1235,22 @@ mod tests {
         assert_eq!(e.status().controls.unwrap().report_rates, [1000, 2000, 4000, 8000]);
         assert_eq!(profile::load_refused_rates(layout::find("g316-x-98").unwrap()), [8000], "the refusal was saved for the device");
         let _ = fs::remove_file(profile::refused_rates_path(layout::find("g316-x-98").unwrap()));
+    }
+
+    #[test]
+    fn a_rate_that_works_is_no_longer_refused() {
+        let _serial = crate::testenv::serial();
+        let g316 = layout::find("g316-x-98").unwrap();
+        // Refusals saved by an earlier attempt, before host mode was taken.
+        profile::save_refused_rates(g316, &[2000, 8000]).unwrap();
+        let (mut e, fake) = linked();
+        assert_eq!(e.status().controls.unwrap().report_rate_refused, [2000, 8000]);
+        ok(e.handle(Request::SetReportRate { hz: 2000 }));
+        e.rate_readback(Some(fake.state().rate));
+        assert!(matches!(e.status().rate_change, Some(RateChange::Done { hz: 2000 })));
+        assert_eq!(e.status().controls.unwrap().report_rate_refused, [8000], "2000 Hz took, so it is offered again");
+        assert_eq!(profile::load_refused_rates(g316), [8000]);
+        let _ = fs::remove_file(profile::refused_rates_path(g316));
     }
 
     #[test]

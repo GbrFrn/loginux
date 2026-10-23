@@ -33,6 +33,9 @@ pub struct Spec {
     pub ext_caps: u16,
     /// 0x8071 effect IDs playable on all clusters at once (cluster 0xFF).
     pub multi: Vec<u16>,
+    /// 0x8061/3 is refused (HID++ error 2) until 0x8101/6 [05] puts profile
+    /// management in host mode, as on the G316.
+    pub rate_needs_host: bool,
     /// 0x8081 zones.
     pub zones: Vec<u8>,
 }
@@ -56,6 +59,8 @@ pub struct State {
     /// A rate index the device refuses, and the HID++ error it answers with.
     pub refuse_rate: Option<(u8, u8)>,
     pub game_mode: bool,
+    /// Profile management is in host mode (0x8101/6 [05]); [03] ends it.
+    pub profiles_host: bool,
     pub refuse: Option<Refuse>,
     /// Edits each reply payload before it is sent: feature ID, function, payload.
     pub mangle: Option<fn(u16, u8, &mut Vec<u8>)>,
@@ -113,7 +118,7 @@ pub fn g316() -> Spec {
     Spec {
         features: vec![
             0x0000, 0x0001, 0x0003, 0x0005, 0x0020, 0x1e00, 0x8061, 0x8071, 0x8081, 0x00c3, 0x00d0, 0x18b0, 0x1b10,
-            0x4523, 0x4540, 0x8040,
+            0x4523, 0x4540, 0x8040, 0x8101,
         ],
         clusters: vec![
             (0x0001, 0, vec![0x0000, 0x0001, 0x000a, 0x0015, 0x0016, 0x0017]),
@@ -127,6 +132,7 @@ pub fn g316() -> Spec {
         ],
         ext_caps: 0x0026,
         multi: vec![0x000c, 0x0013, 0x0016, 0x0017, 0x0018, 0x0019],
+        rate_needs_host: true,
         zones,
     }
 }
@@ -145,6 +151,7 @@ pub fn g903() -> Spec {
         ],
         ext_caps: 0x0004,
         multi: vec![],
+        rate_needs_host: false,
         zones: vec![],
     }
 }
@@ -338,12 +345,17 @@ fn answer(spec: &Spec, st: &mut State, feature: u16, function: u8, p: &[u8]) -> 
         (0x8061, 2) => Ok(vec![st.rate]),
         (0x8061, 3) => match st.refuse_rate {
             Some((index, code)) if index == p[0] => Err(code),
+            _ if spec.rate_needs_host && !st.profiles_host => Err(2),
             _ => {
                 st.rate = p[0];
                 Ok(vec![])
             }
         },
         (0x4523, 0) => Ok(vec![u8::from(st.game_mode)]),
+        (0x8101, 6) => {
+            st.profiles_host = p[0] == 0x05;
+            Ok(vec![])
+        }
         (0x8100, 0) => Ok(vec![1, 4, 1, 5, 1, 0x0c, 0x10, 0, 0xff, 0x0a, 4, 0, 0, 0, 0, 0]),
         (0x8100, 2) => Ok(vec![1, 0, 0, 0]),
         _ => Err(7), // invalid function

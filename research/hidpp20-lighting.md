@@ -158,4 +158,5 @@ These write non-volatile memory, which Loginux never does:
 
 Changing the report rate through `0x8061` makes the USB device re-enumerate,
 so its hidraw node disappears and comes back. (live on the G316 under
-Windows)
+Windows) On Linux, changes to 4000 and 8000 Hz did not re-enumerate it. (live,
+2026-10-23)
