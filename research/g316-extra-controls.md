@@ -56,8 +56,9 @@ not do.
 
 Rate selection must be an explicit user action. Do not put it in a lighting
 profile or send it automatically at startup, login, or after every replug.
-A reconnect undoes the rate, as described above. Before a live Linux verification, record the current index and
-agree on the intended value with the owner.
+A reconnect undoes the rate, as described above. Before a live Linux
+verification, record the current index and agree on the intended value with
+the owner.
 
 ## Brightness and game mode
 

@@ -150,20 +150,22 @@ every ten seconds after.
 | Report rate (`0x8061`) | Shows the current rate and the rates the keyboard supports. Changes it only when you ask. | Changed on Linux to 2000, 4000 and 8000 Hz and read back |
 | Volume knob | Nothing: the knob sends ordinary media keys, which Linux handles. | Seen on Windows |
 
-A report-rate change makes the keyboard leave the USB bus and come back.
-Loginux sends the new rate once and never retries it, waits up to 20 s for
-the keyboard, reads the rate back, and repaints the chosen profile. If the
-keyboard does not return or reports another rate, the editor and the command
-line say so. On a keyboard with profile management (`0x8101`), Loginux
-switches it to host mode for the write and back to onboard mode right after,
-the switch Solaar makes when it claims and releases a device; G HUB makes the
-same host switch before its rate writes. The keyboard keeps the new rate until
-it reconnects, then runs at its own rate again (1000 Hz on the G316 X 98), and
-Loginux does not send the rate again. A rate the keyboard still refuses is marked and not offered again (kept in
-`~/.config/loginux/rates/`; delete that file to try it once more). Brightness and
-game-mode changes are not offered: their commands on the G316 are not
-verified. [G316 extra controls](../research/g316-extra-controls.md)
-has the evidence.
+A report-rate change can make the keyboard leave the USB bus and come back:
+the G316 X 98 did under Windows, and did not for 4000 and 8000 Hz under
+Linux. Loginux sends the new rate once and never retries it, waits up to 20 s
+for the keyboard if it leaves, reads the rate back, and repaints the chosen
+profile. If the keyboard does not return or reports another rate, the editor
+and the command line say so. On a keyboard with profile management
+(`0x8101`), Loginux switches it to host mode for the write and back to
+onboard mode right after, the switch Solaar makes when it claims and releases
+a device; G HUB makes the same host switch before its rate writes. The
+keyboard keeps the new rate until it reconnects, then runs at its own rate
+again (1000 Hz on the G316 X 98), and Loginux does not send the rate again. A
+rate the keyboard still refuses is marked and not offered again (kept in
+`~/.config/loginux/rates/`; delete that file to try it once more). Brightness
+and game-mode changes are not offered: their commands on the G316 are not
+verified. [G316 extra controls](../research/g316-extra-controls.md) has the
+evidence.
 
 ## Run at login
 
