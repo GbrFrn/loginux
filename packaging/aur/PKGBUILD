@@ -48,8 +48,9 @@ build() {
   cd "$_pkgname"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
-  # Panic messages name generated sources under target/; keep the build path out.
-  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/build"
+  # Panic messages name source files: keep the build path and the builder's
+  # home folder (cargo's registry) out of the binary.
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/build --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
   cargo build --frozen --release
 }
 
