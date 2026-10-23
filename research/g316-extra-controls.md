@@ -50,8 +50,11 @@ write. About two and a half minutes after a change to 2000 Hz the keyboard
 re-enumerated, cause not established, and came back at 1000 Hz. The Windows
 capture agrees: each time the keyboard attached it reported 1000 Hz, and G HUB
 wrote its chosen rate again. Loginux does the same with the rate the user
-chose, as described below. Making a rate permanent on the keyboard would mean
-writing the onboard profile, which Loginux does not do.
+chose, as described below. A replug on Linux confirmed both halves (live,
+2026-10-23): with 8000 Hz kept, the keyboard came back at another rate, and
+the engine sent 8000 Hz again as it connected and read it back 5 s later,
+with no further re-enumeration. Making a rate permanent on the keyboard would
+mean writing the onboard profile, which Loginux does not do.
 
 Rate selection is an explicit user action, and a rate is not part of a
 lighting profile. The first plan ruled out any automatic rate write at
@@ -102,4 +105,5 @@ distinct from a watched Linux result.
   keyboard connects at another rate.
 - Brightness and game mode have no writes.
 - On 2026-10-23 Loginux changed the rate on Linux to 2000, 4000 and 8000 Hz
-  and read each one back. Brightness and game mode have only been read.
+  and read each one back, and after a replug it sent the kept 8000 Hz again
+  and read it back. Brightness and game mode have only been read.

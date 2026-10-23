@@ -267,7 +267,8 @@ on the keyboard. On 2026-10-23 the report rate changed to 2000, 4000 and
 8000 Hz and read back each time; 8000 Hz then held for twelve minutes, through
 a lighting release and an engine restart. The keyboard re-enumerated once,
 about two and a half minutes after a change to 2000 Hz, and came back at
-1000 Hz. Not yet tried: a replug right after a rate change.
+1000 Hz. After a replug with 8000 Hz kept, the keyboard came back at another
+rate; Loginux sent 8000 Hz again as it connected and read it back 5 s later.
 [`research/`](../research/README.md) records the evidence and its labels.
 
 ## Credits
