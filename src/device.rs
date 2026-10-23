@@ -520,6 +520,13 @@ mod tests {
         let refused = kb.set_report_rate(6).unwrap_err();
         assert!(matches!(refused, Error::Device(Call { feature: REPORT_RATE, function: 3 }, 2)));
         assert_eq!(fake.state().rate, 4);
+        // The request is G HUB's: function 3 with the rate index as its one byte.
+        let sets: Vec<Vec<u8>> = fake.requests(REPORT_RATE).into_iter().filter(|r| r.0 == 3).map(|r| r.1).collect();
+        assert_eq!(sets.len(), 2, "sent once each, never retried");
+        for (set, index) in sets.iter().zip([4u8, 6]) {
+            assert_eq!(set[0], index);
+            assert!(set[1..].iter().all(|&b| b == 0), "only the index: {set:02x?}");
+        }
     }
 
     #[test]

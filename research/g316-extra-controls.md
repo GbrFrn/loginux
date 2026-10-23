@@ -14,7 +14,7 @@ are only identifiers for that firmware session.
 | Control | Evidence | Safe next use | Still unknown |
 | --- | --- | --- | --- |
 | Lighting brightness `0x8040` | **Live:** feature index 15; function 0 returned `00 64 05 03` (maximum 100, capability bytes `05 03`); function 1 returned `00 64` (current value 100). | Read and show the current value and reported maximum. | The G316 setter's request and persistence have not been established. Do not send a brightness write based on the getter layout. |
-| Report rate `0x8061` | **Live:** index 6; functions 0 and 1 reported bitmap `0x0078`; function 2 returned rate index 3 at 1000 Hz and 6 at 8000 Hz; G HUB sent function 3 with 6, then 3. **Static:** the cached handler accepts indices 3–6 in its ordinary path. | Read supported/current rates; offer an explicit selection of 1000, 2000, 4000 or 8000 Hz after implementing reconnect handling. | The capture proves the 1000/8000 transitions, not a Linux write or how long the setting persists. |
+| Report rate `0x8061` | **Live:** index 6; functions 0 and 1 reported bitmap `0x0078`; function 2 returned index 3 at 1000 Hz; G HUB on Windows set function 3 to 6 and function 2 read back 6. On Linux function 3 refused indices 4, 5 and 6 with error 2 (2026-10-23). **Static:** the cached handler accepts indices 3–6 in its ordinary path. | Read the current rate. Every change Loginux tried on Linux was refused, so it marks a refused rate and stops offering it as working. | Why the firmware refuses rate writes over Linux while G HUB changed the rate on Windows; a full G HUB capture (the preamble, not just the final write) would show any prerequisite. |
 | Game mode `0x4523` | **Live:** index 13; function 0 returned `00` while off; pressing the dedicated key produced `01` and `00` notifications. | Show current on/off state; update it on notifications or by re-reading after reconnect. | No G316 host toggle or per-key disable sequence has been validated. |
 | Knob and mute press | **Live:** interface 1 sends standard HID Consumer Control usages `0x00e9` (volume up) and `0x00ea` (volume down); pressing the knob mutes. | Document that Linux's HID input and sound stack already receive these events. | Knob mode changes and host remapping are separate work; Loginux has no reason to open the key-report interface for lighting. |
 | Consecutive-zone RGB `0x8081/5` | **Live, Windows:** G HUB sent up to three `(first zone, last zone, R, G, B)` records per long report and followed them with `0x8081/7` FrameEnd. The Esc-red capture included range `0x26–0x26`. | Optional transport optimization for runs of equal colors, after preserving `0x8081/1` as the proven Linux path. | Loginux has not used function 5 on Linux; it gives no new visible capability. |
@@ -30,11 +30,18 @@ engine must treat that disconnect as expected for an explicit change, then
 rediscover interface 2 and reapply any active RAM-only lighting profile. A
 failed reconnect is an error to show, not a reason to loop rate writes.
 
-On Linux the keyboard refused 8000 Hz (live, 2026-10-22). Loginux sent
-`0x8061/3 [06]`, the request G HUB sent, while the keyboard ran at 1000 Hz on
-a 480 Mbps link, and the reply was error 2, invalid argument. It still lists
-8000 Hz as supported afterwards. The cause is unknown, so 8000 Hz counts as
-unconfirmed on Linux; 2000 and 4000 Hz have not been tried.
+On Linux this keyboard refused every report-rate change (live, 2026-10-23).
+Loginux sent `0x8061/3` with index 4 (2000 Hz), 5 (4000 Hz) and 6 (8000 Hz) —
+6 is the request G HUB sent — while the keyboard ran at 1000 Hz (index 3) on a
+480 Mbps link. Each reply was error 2, invalid argument, on the same
+connection: the keyboard did not disconnect or re-enumerate, so it is a clean
+rejection, not a link problem. Only 1000 Hz, the current index, is accepted,
+because Loginux sends no write when the requested index already matches. The
+bitmap keeps listing 1000/2000/4000/8000 as supported. The cause is unknown;
+the write path may need a prerequisite G HUB performs on Windows that is not in
+the single-write capture. Loginux records a refused rate for the connection,
+shows it as refused rather than as a working option, and never retries a rate
+write.
 
 Rate selection must be an explicit user action. Do not put it in a lighting
 profile or send it automatically at startup, login, or after every replug.

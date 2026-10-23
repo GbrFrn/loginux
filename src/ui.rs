@@ -1316,9 +1316,14 @@ impl App {
                 let busy = matches!(change, Some(RateChange::Waiting { .. }));
                 for hz in &controls.report_rates {
                     let current = controls.report_rate == Some(*hz);
+                    let refused = controls.report_rate_refused.contains(hz);
                     let text = format!("{hz} HZ");
                     if current {
                         current_mark(ui, &text);
+                    } else if refused {
+                        button(ui, &format!("{text} \u{00b7} REFUSED"), Look::Quiet, false).on_hover_text(
+                            "The keyboard lists this rate but refused it (HID++ error 0x02). A Windows G HUB capture would show what it needs.",
+                        );
                     } else if button(ui, &text, Look::Quiet, !busy).clicked() {
                         self.rate_confirm = Some(*hz);
                     }
@@ -1359,7 +1364,7 @@ impl App {
             "Loginux reads these from the keyboard each time it connects and every ten seconds after.",
             "Brightness and game mode are read only until their commands are verified on this keyboard.",
             "A report-rate change is sent once, only when you confirm it. Loginux then waits for the keyboard to come back and reads the rate back; it never sends a rate on its own.",
-            "G HUB was seen changing this keyboard between 1000 and 8000 Hz on Windows. On Linux the change is not verified yet, and whether the keyboard keeps the rate after a replug is unknown.",
+            "G HUB changed this keyboard's rate on Windows, but over Linux this firmware refused every rate change (error 2), including rates it lists, so a tried rate is marked refused. Changing the rate on Linux would need the step G HUB performs, which a Windows capture would show.",
         ] {
             body(ui, text, TEXT2, 13.0);
             ui.add_space(6.0);
@@ -2951,6 +2956,9 @@ mod tests {
         w.click("CHANGE RATE");
         w.until("the refusal shows", |w| w.nodes.iter().any(|n| n.label.starts_with("The change to 4000 Hz did not take")));
         assert!(noticed(&w, "refused 4000 Hz"));
+        let refused = "4000 HZ \u{00b7} REFUSED";
+        w.until("the refused rate is marked", |w| w.has(refused));
+        assert!(!w.enabled(refused), "a refused rate is not offered again");
 
         // A second window uses this engine, and leaves it running when it closes.
         let second = Window::on(Some("/dev/fake-ui"));

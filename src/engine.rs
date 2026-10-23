@@ -300,6 +300,8 @@ struct Link {
     controls: Controls,
     rates: Option<Rates>,
     next_controls: Instant,
+    /// Rate indices the keyboard refused this connection.
+    refused: Vec<u8>,
 }
 
 /// A report-rate write the user asked for, waiting for a readback.
@@ -330,9 +332,15 @@ pub fn read_controls(kb: &mut Keyboard) -> Result<(Controls, Option<Rates>), Err
         brightness,
         report_rate: rates.as_ref().and_then(|(_, current)| hz(*current)),
         report_rates: rates.as_ref().map(|(supported, _)| supported.iter().filter_map(|&i| hz(i)).collect()).unwrap_or_default(),
+        report_rate_refused: vec![], // the caller re-applies what this connection has seen refused
         game_mode,
     };
     Ok((controls, rates))
+}
+
+/// Rate indices as Hz, for the refused list.
+fn refused_hz(indices: &[u8]) -> Vec<u32> {
+    indices.iter().filter_map(|&i| RATES_HZ.get(usize::from(i)).copied()).collect()
 }
 
 struct Engine {
@@ -513,10 +521,19 @@ impl Engine {
             }
             Err(e) => {
                 let stays = RATES_HZ.get(usize::from(current)).map_or_else(String::new, |r| format!("; it stays at {r} Hz"));
+                // A device refusal (it answered with an error) means the keyboard lists this
+                // rate but will not take it: remember it so it is not offered as working again.
+                let refusal = matches!(e, Error::Device(..));
                 let error = match e {
                     Error::Device(_, code) => format!("the keyboard refused {hz} Hz (HID++ error {code:#04x}){stays}"),
                     e => e.to_string(),
                 };
+                if refusal {
+                    if !link.refused.contains(&index) {
+                        link.refused.push(index);
+                    }
+                    link.controls.report_rate_refused = refused_hz(&link.refused);
+                }
                 log(&format!("report-rate change refused: {error}"));
                 self.rate_change = Some(RateChange::Failed { hz, error: error.clone() });
                 Err(error)
@@ -693,6 +710,7 @@ impl Engine {
             controls,
             rates,
             next_controls: now + CONTROLS_EVERY,
+            refused: vec![],
         });
         if self.rate_pending.is_some() {
             self.rate_readback(current);
@@ -748,6 +766,7 @@ impl Engine {
                 let (controls, rates) = read_controls(&mut link.kb)?;
                 let current = rates.as_ref().map(|r| r.1);
                 (link.controls, link.rates) = (controls, rates);
+                link.controls.report_rate_refused = refused_hz(&link.refused);
                 if readback_due {
                     self.rate_readback(current); // the keyboard kept its connection through the change
                 }
@@ -1181,6 +1200,16 @@ mod tests {
         let Reply::Err(refused) = e.handle(Request::SetReportRate { hz: 8000 }) else { panic!("8000 Hz was accepted") };
         assert_eq!(refused, "the keyboard refused 8000 Hz (HID++ error 0x02); it stays at 1000 Hz");
         assert!(matches!(e.status().rate_change, Some(RateChange::Failed { hz: 8000, .. })));
+        assert_eq!(e.status().controls.unwrap().report_rate_refused, [8000], "listed, then refused: not offered as working");
+        let sets = |fake: &Fake| fake.requests(0x8061).iter().filter(|r| r.0 == 3).count();
+        assert_eq!(sets(&fake), 1);
+        for _ in 0..3 {
+            e.step().unwrap();
+        }
+        assert_eq!(sets(&fake), 1, "a refusal is never retried");
+        e.link.as_mut().unwrap().next_controls = Instant::now();
+        e.step().unwrap();
+        assert_eq!(e.status().controls.unwrap().report_rate_refused, [8000], "the ten-second re-read keeps it"); 
         assert!(matches!(e.handle(Request::SetReportRate { hz: 1234 }), Reply::Err(_)));
         ok(e.handle(Request::SetReportRate { hz: 1000 }));
         assert!(matches!(e.status().rate_change, Some(RateChange::Done { hz: 1000 })), "already at that rate");

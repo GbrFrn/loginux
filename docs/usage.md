@@ -147,16 +147,19 @@ every ten seconds after.
 | --- | --- | --- |
 | Lighting brightness (`0x8040`) | Shows the current value and the maximum. Read only. | Read on Linux |
 | Game mode (`0x4523`) | Shows on or off, and follows the keyboard's game-mode key. Read only. | Read on Linux |
-| Report rate (`0x8061`) | Shows the current rate and the rates the keyboard supports. Changes it only when you ask: the DEVICE tab after a confirmation, or `loginux rate HZ`. | Seen in G HUB on Windows. On Linux the keyboard refused 8000 Hz; 2000 and 4000 Hz are untried |
+| Report rate (`0x8061`) | Shows the current rate and the rates the keyboard supports. Changes it only when you ask, and marks a rate the keyboard refuses. | Changed in G HUB on Windows; on Linux this firmware refused every change (error 2) |
 | Volume knob | Nothing: the knob sends ordinary media keys, which Linux handles. | Seen on Windows |
 
 A report-rate change makes the keyboard leave the USB bus and come back.
 Loginux sends the new rate once and never retries it, waits up to 20 s for
 the keyboard, reads the rate back, and repaints the chosen profile. If the
 keyboard does not return or reports another rate, the editor and the command
-line say so. Whether the keyboard keeps the rate after a replug is not known
-yet. Brightness and game-mode changes are not offered: their commands on the
-G316 are not verified. [G316 extra controls](../research/g316-extra-controls.md)
+line say so. On the G316 X 98 (firmware U186.01.B0007) every rate change was
+refused over Linux, including rates the keyboard lists; a refused rate is
+marked and not offered again. Changing the rate here would need the step G HUB
+performs on Windows, which a USB capture there would show. Brightness and
+game-mode changes are not offered: their commands on the G316 are not
+verified. [G316 extra controls](../research/g316-extra-controls.md)
 has the evidence.
 
 ## Run at login

@@ -72,6 +72,10 @@ pub struct Controls {
     pub report_rate: Option<u32>,
     /// Report rates the keyboard says it supports, in Hz.
     pub report_rates: Vec<u32>,
+    /// Rates the keyboard lists but refused this connection (HID++ error on the
+    /// write), so they are shown as refused rather than as working options.
+    #[serde(default)]
+    pub report_rate_refused: Vec<u32>,
     /// Game mode (0x4523), read only: it changes with the keyboard's own key.
     pub game_mode: Option<bool>,
 }

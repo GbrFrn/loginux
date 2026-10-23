@@ -202,8 +202,12 @@ fn describe(status: &Status) -> String {
 
 fn controls_text(c: &Controls) -> String {
     let brightness = c.brightness.map_or("not reported".into(), |[now, max]| format!("{now} of {max} (read only)"));
+    let list = |rates: &[u32]| rates.iter().map(|r| format!("{r}")).collect::<Vec<_>>().join(", ");
     let rate = match c.report_rate {
-        Some(hz) => format!("{hz} Hz; supports {}", c.report_rates.iter().map(|r| format!("{r}")).collect::<Vec<_>>().join(", ")),
+        Some(hz) => {
+            let refused = if c.report_rate_refused.is_empty() { String::new() } else { format!(" ({} refused by the keyboard)", list(&c.report_rate_refused)) };
+            format!("{hz} Hz; supports {}{refused}", list(&c.report_rates))
+        }
         None => "not reported".into(),
     };
     let game = c.game_mode.map_or("not reported", |on| if on { "on (read only)" } else { "off (read only)" });
@@ -888,7 +892,7 @@ mod tests {
             message: Some("hello".into()),
             pid: 42,
             hosted: true,
-            controls: Some(Controls { brightness: Some([100, 100]), report_rate: Some(1000), report_rates: vec![1000, 8000], game_mode: Some(true) }),
+            controls: Some(Controls { brightness: Some([100, 100]), report_rate: Some(1000), report_rates: vec![1000, 8000], report_rate_refused: vec![8000], game_mode: Some(true) }),
             rate_change: Some(RateChange::Failed { hz: 8000, error: "refused".into() }),
         };
         let text = describe(&s);
@@ -897,7 +901,7 @@ mod tests {
             "lighting: showing profile \"Test\"",
             "engine: pid 42 inside an editor window",
             "brightness: 100 of 100 (read only)",
-            "report rate: 1000 Hz; supports 1000, 8000",
+            "report rate: 1000 Hz; supports 1000, 8000 (8000 refused by the keyboard)",
             "game mode: on (read only)",
             "report-rate change to 8000 Hz failed: refused",
             "last message: hello",
