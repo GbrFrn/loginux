@@ -28,7 +28,8 @@ pub fn send(summary: &str, body: &str) {
     #[cfg(test)]
     crate::testenv::init();
     let mut cmd = Command::new(BUSCTL.get_or_init(|| PathBuf::from("busctl")));
-    cmd.args(["--user", "call", "org.freedesktop.Notifications", "/org/freedesktop/Notifications"])
+    // `--` ends busctl's options: the timeout `-1`, or a profile named `-x`, is an argument.
+    cmd.args(["--user", "--", "call", "org.freedesktop.Notifications", "/org/freedesktop/Notifications"])
         .args(["org.freedesktop.Notifications", "Notify", "susssasa{sv}i", "Loginux"])
         .arg(LAST.load(Ordering::Relaxed).to_string())
         .args(["loginux", summary, body, "0", "1", "desktop-entry", "s", "loginux", "-1"]);
