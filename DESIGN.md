@@ -281,6 +281,7 @@ Full-width 48pt boxes with a 2pt Rule edge and 10pt inset. The name sits in Smal
 - **Hover / Active:** edge goes to Secondary Text on hover and Text when active; fill steps to Raised or Rule.
 - **Cursor and selection:** 2pt Signal Red cursor; selected text tinted Signal Red at 45 percent with a 1pt Text stroke.
 - **Scroll bars:** solid, 8pt wide, Rule track, Secondary Text handle (Text when hovered), no fade.
+- **Stepper:** a 56pt centred field between quiet FASTER and SLOWER buttons, for an effect's seconds per cycle. The buttons step through 1, 1.5, 2, 3, 4, 5, 6, 8, 10, 12, 15 and 20 seconds and grey out at the ends; clicking the field selects its value, and a typed value (comma or point) applies on Enter or when the field loses focus.
 
 ### Specimen Column
 The selection shown as a type specimen: a Label line naming the selection (up to five names, else a zone count), the hex in Hex caps, then the colour as three flat swatches of full width x 72pt, half width x 34pt and one-fifth width x 14pt, split evenly when several colours are selected. With nothing selected, a 72pt dot-matrix patch and one line of instruction take the swatch's place.

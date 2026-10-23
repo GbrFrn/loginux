@@ -370,6 +370,14 @@
       "css": ".ds-field-row { display: inline-flex; gap: 8px; align-items: center; } .ds-field-label { font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-weight: 700; font-size: 10px; color: #8E8E94; } .ds-field { font-family: Archivo, sans-serif; font-size: 14px; color: #EDEDED; background: #000000; border: 2px solid #2A2A2E; border-radius: 0; height: 26px; width: 96px; padding: 0 6px; caret-color: #FF2E3F; } .ds-field:hover { border-color: #A9A9AE; } .ds-field:focus-visible { outline: none; border-color: #EDEDED; } .ds-field::selection { background: rgba(255,46,63,0.45); }"
     },
     {
+      "name": "Stepper",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Seconds per cycle: a 56px centred field between quiet FASTER and SLOWER buttons. The buttons step through 1 to 20 seconds and grey out at the ends; a typed value applies on Enter or blur.",
+      "html": "<div class=\"ds-stepper\"><button class=\"ds-btn-quiet\">FASTER</button><input class=\"ds-field\" value=\"4.0\"><button class=\"ds-btn-quiet\">SLOWER</button></div>",
+      "css": ".ds-stepper { display: inline-flex; align-items: center; gap: 8px; } .ds-stepper .ds-field { width: 56px; text-align: center; }"
+    },
+    {
       "name": "Board Keys",
       "kind": "custom",
       "refersTo": "key-unpainted",

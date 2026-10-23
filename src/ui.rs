@@ -272,6 +272,17 @@ fn dots(painter: &Painter, r: Rect, color: Color32) {
     painter.add(Shape::mesh(mesh));
 }
 
+/// Milliseconds as seconds, with one decimal at least and as many as the value has.
+fn seconds_text(ms: u16) -> String {
+    let text = format!("{:.3}", f32::from(ms) / 1000.0);
+    let trimmed = text.trim_end_matches('0');
+    if trimmed.ends_with('.') { format!("{trimmed}0") } else { trimmed.to_string() }
+}
+
+/// Seconds per cycle, in milliseconds, that FASTER and SLOWER step through: roughly
+/// even steps to the eye, from 1 to 20 seconds.
+const CYCLE_STEPS: [u16; 12] = [1000, 1500, 2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000, 20000];
+
 // ---- link to the engine ------------------------------------------------------
 
 #[derive(Default)]
@@ -474,6 +485,8 @@ struct App {
     hover: Option<u8>,
     hsv: [f32; 3],
     hex_text: String,
+    /// The seconds-per-cycle field while it is being typed in.
+    cycle_text: Option<String>,
     checks: BTreeMap<u8, Seen>,
     set: Option<Set>,
     /// The run whose answers the right column shows before a check starts.
@@ -516,6 +529,7 @@ impl App {
             hover: None,
             hsv: [0.0, 0.0, 1.0],
             hex_text: String::new(),
+            cycle_text: None,
             checks: profile::load_checks(model),
             set: None,
             focus: Set::all(model)[0],
@@ -1028,12 +1042,39 @@ impl App {
             ui.add_space(12.0);
         }
         if matches!(e.kind, fx::Kind::Breathe | fx::Kind::Cycle | fx::Kind::Wave) {
-            let mut secs = f32::from(e.period) / 1000.0;
+            // FASTER and SLOWER step through CYCLE_STEPS; the field takes a typed
+            // value, applied on Enter or when it loses focus.
+            label(ui, "SECONDS PER CYCLE", LABEL_PX, LABEL);
+            ui.add_space(2.0);
+            let (shortest, longest) = (CYCLE_STEPS[0], CYCLE_STEPS[CYCLE_STEPS.len() - 1]);
+            let mut period = e.period;
             ui.horizontal(|ui| {
-                label(ui, "SECONDS PER CYCLE", LABEL_PX, LABEL);
-                ui.add(egui::DragValue::new(&mut secs).range(1.0..=20.0).speed(0.05).max_decimals(1));
+                if button(ui, "FASTER", Look::Quiet, e.period > shortest).clicked() {
+                    period = CYCLE_STEPS.iter().rev().copied().find(|&s| s < e.period).unwrap_or(shortest);
+                }
+                let mut text = self.cycle_text.clone().unwrap_or_else(|| seconds_text(e.period));
+                let mut out = egui::TextEdit::singleline(&mut text).desired_width(56.0).align(egui::Align2::CENTER_CENTER).show(ui);
+                let edit = out.response.response.clone();
+                if edit.gained_focus() {
+                    // Clicking the number selects it, so typing replaces it.
+                    out.state.cursor.set_char_range(Some(egui::text::CCursorRange::select_all_str(&text)));
+                    out.state.store(ui.ctx(), edit.id);
+                }
+                // egui can report the loss of focus twice; only an edit in progress applies.
+                if edit.lost_focus() {
+                    if self.cycle_text.take().is_some()
+                        && let Ok(secs) = text.trim().trim_end_matches(['s', 'S']).trim().replace(',', ".").parse::<f32>()
+                        && secs.is_finite()
+                    {
+                        period = ((secs * 1000.0).round() as u32).clamp(shortest.into(), longest.into()) as u16;
+                    }
+                } else if edit.has_focus() {
+                    self.cycle_text = Some(text);
+                }
+                if button(ui, "SLOWER", Look::Quiet, e.period < longest).clicked() {
+                    period = CYCLE_STEPS.iter().copied().find(|&s| s > e.period).unwrap_or(longest);
+                }
             });
-            let period = (secs * 1000.0).round() as u16;
             if period != e.period
                 && let Some(w) = &mut self.work.effect
             {
@@ -2892,10 +2933,24 @@ mod tests {
         let _serial = crate::testenv::serial();
         let mut w = Window::open();
         w.click("Colour Cycle");
-        let before = w.app.work.effect.as_ref().unwrap().period;
-        let secs = w.right(Role::SpinButton);
-        w.drag(secs.center(), secs.center() + vec2(40.0, 0.0));
-        assert_eq!(w.app.work.effect.as_ref().unwrap().period, before + 2000, "two seconds more");
+        let period = |w: &Window| w.app.work.effect.as_ref().unwrap().period;
+        assert_eq!(period(&w), 10000, "the preset's period");
+        w.click("SLOWER");
+        assert_eq!(period(&w), 12000, "the next step up");
+        w.click("FASTER");
+        w.click("FASTER");
+        assert_eq!(period(&w), 8000, "and down");
+        // Typed: comma or point, with or without the unit; out of range is clamped,
+        // and something that is not a number leaves the period as it was.
+        for (typed, want) in [("12,5", 12500), ("2.25 s", 2250), ("0.2", 1000), ("lots", 1000), ("99", 20000)] {
+            let field = w.find(&seconds_text(period(&w)));
+            w.click_at(field.center()); // selects the number, so typing replaces it
+            w.type_text(typed);
+            w.key(Key::Enter);
+            assert_eq!(period(&w), want, "typed {typed:?}");
+        }
+        assert!(!w.enabled("SLOWER") && w.enabled("FASTER"), "at the longest cycle");
+        assert_eq!([1000, 2250, 12500, 20000].map(seconds_text), ["1.0", "2.25", "12.5", "20.0"]);
         w.click("Ripple");
         w.click("DISCARD AND OPEN");
         assert_eq!(w.app.work.effect.as_ref().map(|e| e.kind), Some(fx::Kind::Ripple));
