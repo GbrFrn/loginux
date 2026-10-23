@@ -129,6 +129,17 @@ components:
     typography: "{typography.body}"
     rounded: "{rounded.none}"
     height: "26pt"
+  switch-on:
+    backgroundColor: "{colors.signal-red}"
+    textColor: "{colors.text}"
+    typography: "{typography.label}"
+    rounded: "{rounded.none}"
+    size: "32pt x 16pt, 8pt knob"
+  switch-off:
+    backgroundColor: "transparent"
+    textColor: "{colors.text-secondary}"
+    typography: "{typography.label}"
+    rounded: "{rounded.none}"
   key-unpainted:
     backgroundColor: "{colors.dark-key}"
     textColor: "{colors.text-secondary}"
@@ -219,7 +230,7 @@ Near-black greys for structure, LED colour for content, and three signals that n
 
 A fixed three-column instrument under a header. The window opens at 1360 x 840pt with a minimum of 1120 x 700pt; `LOGINUX_UI_ZOOM` (0.5 to 4) scales it on top of the display scale.
 
-- **Header:** 64pt tall on Ground, closed by a 2pt Text-coloured rule. Wordmark 22pt from the left; tabs 36pt after it, 34pt apart, hit areas padded 8pt; the login-service button 22pt from the right; the dot patch (192 x 30pt) sits 22pt left of that button and drops out when the tabs need the room.
+- **Header:** 64pt tall on Ground, closed by a 2pt Text-coloured rule. Wordmark 22pt from the left; tabs 36pt after it, 34pt apart, hit areas padded 8pt; the RUN AT LOGIN switch 22pt from the right; the dot patch (192 x 30pt) sits 22pt left of it and drops out when the tabs need the room.
 - **Left column:** 236pt wide with 16pt margins on Ground: profiles in 48pt ruled boxes, then a rule and the connection status block pinned to the bottom.
 - **Centre column:** Ground with 24pt margins, scrolling vertically: title, meta line, proof key, then the board at the column's width (at most 1200pt, key unit at most 60pt), then selection and research controls.
 - **Right column:** 316pt wide with 16pt margins on Panel: the specimen of the selection (label, hex, swatch at three sizes), picker, value rows, colour list, then save and use actions.
@@ -245,11 +256,19 @@ Square everywhere: corner radius 0 on windows, menus, widgets, buttons, boxes, f
 ### Buttons
 Bitmap caps in a snapped rectangle, sized to the label plus 24 x 18pt.
 - **Shape:** square (0), 2pt edge drawn inside.
-- **Primary:** Signal Red fill, Ground label, no edge; hover Signal Red Hot. One per context: SAVE, RUN AT LOGIN, TAKE OVER, a confirm's yes.
+- **Primary:** Signal Red fill, Ground label, no edge; hover Signal Red Hot. One per context: SAVE, TAKE OVER, a confirm's yes.
 - **Outline:** transparent with a Text edge and Text label; hover Raised, pressed Rule. For committing actions such as RELEASE LIGHTING, USE THIS PROFILE, CREATE, CHECK.
 - **Quiet:** transparent with a Rule edge and Secondary Text label; hover Raised with Text label. For secondary and reversible actions: REVERT, DELETE, SKIP, selection presets.
 - **Focus:** a 2pt Signal Red outline 3pt outside the button.
 - **Disabled:** Disabled text, no edge, no fill, no click sense.
+
+### Switch
+The login service's one setting, at the header's right: the label RUN AT LOGIN in Label caps, never changing, then 10pt on a 32 x 16pt square track holding an 8pt knob (the same 8pt square that marks connection and IN USE) inset 4pt. Label and track are one control with an 8pt padded hit area.
+- **On:** Signal Red track, Ground knob at the right, Text label; hover Signal Red Hot.
+- **Off:** transparent track with a 2pt Secondary Text edge, the knob at the left and the label in Secondary Text; hover Raised fill with Text edge, knob and label.
+- **Changing:** while systemctl runs, the knob sits on the side asked for, everything in Disabled grey with a Rule edge, and the switch takes no clicks, so a second click cannot undo the first.
+- **Unknown:** before systemd answers, the same grey with the knob centred. Without the service file the label reads SERVICE NOT INSTALLED in Disabled grey and no track is drawn.
+- **Focus:** a 2pt Signal Red outline 3pt outside label and track; Space or Enter flips it.
 
 ### Tabs
 Tab-size bitmap caps in the header. Inactive tabs are Label Grey and turn Text on hover; the active tab is Text with a 4pt Signal Red underline resting on the header rule and overhanging the word by 2pt each side. Focus is a 2pt red outline.

@@ -2,12 +2,13 @@
 # Stand-in for `systemctl --user ...` in Loginux's tests (src/testenv.rs). Its
 # files live in $LOGINUX_TEST_SYSTEMD: every call is logged; `is-enabled`
 # answers from `state`, which `enable` and `disable` change; both fail while a
-# `fails` file exists.
+# `fails` file exists, and wait while a `hold` file exists.
 cd "${LOGINUX_TEST_SYSTEMD:?set by the tests}" || exit 1
 echo "$*" >> log
 case "$*" in
 *is-enabled*) [ -f state ] && cat state; exit 0 ;;
 esac
+while [ -f hold ]; do sleep 0.05; done
 if [ -f fails ]; then echo "Failed to $2 loginux.service" >&2; exit 1; fi
 case "$*" in
 *" enable "*) echo enabled > state ;;

@@ -186,6 +186,58 @@ fn button(ui: &mut Ui, text: &str, look: Look, enabled: bool) -> Response {
     resp
 }
 
+/// The login switch, right-aligned on `at.x` and centred on `at.y`: a fixed RUN AT
+/// LOGIN label and a square switch whose 8pt knob shows whether loginux.service
+/// starts at login. While systemctl works, the knob shows the side asked for and
+/// the switch takes no clicks. Returns the response and the drawn group.
+fn login_switch(ui: &mut Ui, at: Pos2, service: Service) -> (Response, Rect) {
+    let ppp = ui.pixels_per_point();
+    let installed = service != Service::NotInstalled;
+    let text = if installed { "RUN AT LOGIN" } else { "SERVICE NOT INSTALLED" };
+    let (on, enabled) = match service {
+        Service::Enabled => (Some(true), true),
+        Service::Disabled => (Some(false), true),
+        Service::Changing(to) => (Some(to), false),
+        Service::Unknown | Service::NotInstalled => (None, false),
+    };
+    let t = px_size(text, LABEL_PX, ppp);
+    let track = vec2(32.0, 16.0);
+    let width = t.x + if installed { 10.0 + track.x } else { 0.0 };
+    let group = Rect::from_min_max(pos2(at.x - width, at.y - track.y / 2.0), pos2(at.x, at.y + track.y / 2.0));
+    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let resp = ui.interact(group.expand(8.0), ui.scope_id().with("login switch"), sense);
+    resp.widget_info(|| match on {
+        Some(on) => egui::WidgetInfo::selected(egui::Role::Switch, enabled, on, text),
+        None => egui::WidgetInfo::labeled(egui::Role::Switch, enabled, text),
+    });
+    let hot = enabled && resp.hovered();
+    // On: a red track, the knob in Ground at the right. Off: a grey edged track, the
+    // knob at the left. Waiting or unknown: Disabled grey.
+    let (ink, bg, edge, knob) = match service {
+        Service::Enabled => (TEXT, if hot { RED_HOT } else { RED }, Color32::TRANSPARENT, GROUND),
+        Service::Disabled if hot => (TEXT, RAISED, TEXT, TEXT),
+        Service::Disabled => (TEXT2, Color32::TRANSPARENT, TEXT2, TEXT2),
+        _ => (DISABLED, Color32::TRANSPARENT, RULE, DISABLED),
+    };
+    let p = ui.painter();
+    px_text(p, pos2(group.min.x, at.y - t.y / 2.0), text, LABEL_PX, ink);
+    if installed {
+        let r = Rect::from_min_size(pos2(at.x - track.x, group.min.y), track);
+        fill(p, r, bg);
+        outline(p, r, 2.0, edge);
+        let x = match on {
+            Some(true) => r.max.x - 12.0,
+            Some(false) => r.min.x + 4.0,
+            None => r.center().x - 4.0,
+        };
+        fill(p, Rect::from_min_size(pos2(x, r.min.y + 4.0), vec2(8.0, 8.0)), knob);
+    }
+    if resp.has_focus() {
+        outline(p, group.expand(3.0), 2.0, RED);
+    }
+    (resp, group)
+}
+
 /// Bitmap text that never claims more width than the layout offers; overflow is clipped.
 fn label(ui: &mut Ui, text: &str, px: Px, color: Color32) -> Rect {
     let size = px_size(text, px, ui.pixels_per_point());
@@ -302,6 +354,8 @@ enum Service {
     NotInstalled,
     Enabled,
     Disabled,
+    /// systemctl is enabling (true) or disabling the service; read again when it returns.
+    Changing(bool),
 }
 
 static SYSTEMCTL: OnceLock<PathBuf> = OnceLock::new();
@@ -476,6 +530,8 @@ impl App {
             self.hosted = None;
             self.service_start = Some(Instant::now());
         }
+        // The switch moves at once and takes no clicks until systemctl returns.
+        *self.service.lock().expect("service lock") = Service::Changing(on);
         self.systemctl(&[if on { "enable" } else { "disable" }, "--now"]);
     }
 
@@ -628,7 +684,7 @@ impl App {
             // An enabled service that is not running (quit from the tray, say) is
             // started once, which brings the tray back; only a disabled or missing
             // service, or one that failed to start, leaves the engine to this window.
-            if service == Service::Unknown {
+            if matches!(service, Service::Unknown | Service::Changing(_)) {
                 return; // systemd has not answered yet
             }
             self.host_tried = Some(Instant::now());
@@ -697,28 +753,24 @@ impl App {
         }
 
         let service = *self.service.lock().expect("service lock");
-        let (text, look, enabled) = match service {
-            Service::Enabled => ("RUNS AT LOGIN", Look::Quiet, true),
-            Service::Disabled => ("RUN AT LOGIN", Look::Primary, true),
-            Service::NotInstalled => ("SERVICE NOT INSTALLED", Look::Quiet, false),
-            Service::Unknown => ("RUN AT LOGIN", Look::Quiet, false),
-        };
-        let bsize = px_size(text, LABEL_PX, ppp) + vec2(24.0, 18.0);
-        let brect = Rect::from_min_size(pos2(r.max.x - 22.0 - bsize.x, r.center().y - bsize.y / 2.0), bsize);
-        let resp = ui.put(brect, |ui: &mut Ui| button(ui, text, look, enabled));
+        let (resp, group) = login_switch(ui, pos2(r.max.x - 22.0, r.center().y), service);
         let resp = resp.on_hover_text(match service {
             Service::NotInstalled => {
                 "Install systemd/loginux.service into ~/.config/systemd/user/ (see README) to keep lighting after this window closes."
             }
             Service::Enabled => {
-                "~/.config/systemd/user/default.target.wants/loginux.service starts `loginux run` at login. Click to disable and stop it."
+                "On: loginux.service starts at every login and keeps the lighting applied. Click to turn it off; the lighting then stays only while this window is open."
             }
-            _ => "Lighting stays only while this window is open. Click to enable loginux.service (systemctl --user enable --now).",
+            Service::Disabled => {
+                "Off: the lighting stays only while this window is open. Click to start loginux.service now and at every login."
+            }
+            Service::Changing(_) => "Waiting for systemd\u{2026}",
+            Service::Unknown => "Asking systemd whether loginux.service starts at login\u{2026}",
         });
         if resp.clicked() {
             self.set_service(service != Service::Enabled);
         }
-        let patch = Rect::from_min_max(pos2(brect.min.x - 214.0, r.center().y - 15.0), pos2(brect.min.x - 22.0, r.center().y + 15.0));
+        let patch = Rect::from_min_max(pos2(group.min.x - 214.0, r.center().y - 15.0), pos2(group.min.x - 22.0, r.center().y + 15.0));
         if patch.min.x > x {
             dots(&p, patch, DOTS);
         }
@@ -1746,7 +1798,7 @@ impl App {
 /// Development aid (`--features screenshot`): LOGINUX_SHOT=out.ppm captures the window
 /// after LOGINUX_SHOT_AFTER frames (default 30) and closes it the normal way.
 /// LOGINUX_SHOT_SELECT="23,1,19,4" preselects zones and LOGINUX_SHOT_PAINT=#rrggbb paints
-/// them; LOGINUX_SHOT_CONFIRM shows the unsaved-close question; LOGINUX_SHOT_SERVICE=off|on
+/// them; LOGINUX_SHOT_CONFIRM shows the unsaved-close question; LOGINUX_SHOT_SERVICE=off|on|changing
 /// stands in for systemd's answer; LOGINUX_SHOT_TAB=device opens the DEVICE tab
 /// (LOGINUX_SHOT_CONFIRM_RATE=8000 shows the rate confirmation); LOGINUX_SHOT_TAB=check
 /// opens the channel check, and LOGINUX_SHOT_SET=strip starts a run on the first strip.
@@ -1764,9 +1816,6 @@ fn shot(app: &mut App, ctx: &egui::Context) {
         if let Some(c) = std::env::var("LOGINUX_SHOT_PAINT").ok().and_then(|c| profile::parse_rgb(&c).ok()) {
             app.paint_selection(c);
         }
-        if let Ok(state) = std::env::var("LOGINUX_SHOT_SERVICE") {
-            *app.service.lock().expect("service lock") = if state == "on" { Service::Enabled } else { Service::Disabled };
-        }
         if std::env::var("LOGINUX_SHOT_CONFIRM").is_ok() {
             app.confirm = Some(Confirm::Close);
         }
@@ -1783,6 +1832,16 @@ fn shot(app: &mut App, ctx: &egui::Context) {
         }
     }
     let after: u64 = std::env::var("LOGINUX_SHOT_AFTER").ok().and_then(|n| n.parse().ok()).unwrap_or(30);
+    // Every frame up to the capture: the window's own systemd probe would replace it.
+    if frame <= after
+        && let Ok(state) = std::env::var("LOGINUX_SHOT_SERVICE")
+    {
+        *app.service.lock().expect("service lock") = match state.as_str() {
+            "on" => Service::Enabled,
+            "changing" => Service::Changing(true),
+            _ => Service::Disabled,
+        };
+    }
     if frame == after {
         eprintln!("shot: {} points per pixel", ctx.pixels_per_point());
         ctx.request_screenshot(move |img| {
@@ -2179,6 +2238,9 @@ mod tests {
         role: Role,
         rect: Rect,
         enabled: bool,
+        /// On or off, for a switch or a check box.
+        toggled: Option<bool>,
+        focused: bool,
     }
 
     /// The editor without a window: frames run headless, and controls are found
@@ -2236,14 +2298,16 @@ mod tests {
                 out.textures_delta.clear(); // nothing paints them
                 self.commands.extend(out.viewport_output.into_values().flat_map(|v| v.commands));
                 if let Some(update) = out.platform_output.accesskit_update {
+                    let focus = update.focus;
                     self.nodes = update
                         .nodes
                         .iter()
-                        .filter_map(|(_, n)| {
+                        .filter_map(|(id, n)| {
                             let b = n.bounds()?;
                             let rect = Rect::from_min_max(pos2(b.x0 as f32, b.y0 as f32), pos2(b.x1 as f32, b.y1 as f32));
                             let label = n.label().or(n.value()).unwrap_or_default().to_string();
-                            Some(Node { label, role: n.role(), rect, enabled: !n.is_disabled() })
+                            let toggled = n.toggled().map(|t| t == egui::accesskit::Toggled::True);
+                            Some(Node { label, role: n.role(), rect, enabled: !n.is_disabled(), toggled, focused: *id == focus })
                         })
                         .collect();
                 }
@@ -2266,6 +2330,14 @@ mod tests {
 
         fn enabled(&self, label: &str) -> bool {
             self.nodes.iter().any(|n| n.label == label && n.enabled)
+        }
+
+        fn toggled(&self, label: &str) -> Option<bool> {
+            self.nodes.iter().find(|n| n.label == label).and_then(|n| n.toggled)
+        }
+
+        fn focused(&self, label: &str) -> bool {
+            self.nodes.iter().any(|n| n.label == label && n.focused)
         }
 
         /// The leftmost enabled control with this label.
@@ -2523,7 +2595,7 @@ mod tests {
 
     impl Drop for ServiceState {
         fn drop(&mut self) {
-            for file in ["state", "fails"] {
+            for file in ["state", "fails", "hold"] {
                 let _ = std::fs::remove_file(crate::testenv::systemd().join(file));
             }
         }
@@ -2812,17 +2884,35 @@ mod tests {
         let _state = ServiceState::set("disabled");
         let mut w = Window::open();
         w.until("systemd answers", |w| service(w) == Service::Disabled);
+        assert_eq!(w.toggled("RUN AT LOGIN"), Some(false), "a switch, off");
+        // While systemctl works, the switch shows the side asked for and takes no clicks.
+        std::fs::write(systemd.join("hold"), "").unwrap();
         w.click("RUN AT LOGIN");
+        assert!(service(&w) == Service::Changing(true));
+        assert_eq!((w.toggled("RUN AT LOGIN"), w.enabled("RUN AT LOGIN")), (Some(true), false));
+        std::fs::remove_file(systemd.join("hold")).unwrap();
         w.until("the service is enabled", |w| service(w) == Service::Enabled);
         assert!(w.app.hosted.is_none(), "the window handed its engine over");
-        w.click("RUNS AT LOGIN");
+        w.run(1);
+        assert_eq!(w.toggled("RUN AT LOGIN"), Some(true), "on, under the same label");
+        // The keyboard works it too: Tab to the switch, Space turns it off.
+        for _ in 0..40 {
+            if w.focused("RUN AT LOGIN") {
+                break;
+            }
+            w.key(Key::Tab);
+        }
+        w.key(Key::Space);
         w.until("the service is disabled", |w| service(w) == Service::Disabled);
         std::fs::write(systemd.join("fails"), "").unwrap();
         w.click("RUN AT LOGIN");
         w.until("the failure shows", |w| noticed(w, "systemctl --user enable --now: Failed to enable loginux.service"));
+        w.until("the switch is off again", |w| service(w) == Service::Disabled);
         std::fs::remove_file(systemd.join("fails")).unwrap();
         let log = std::fs::read_to_string(systemd.join("log")).unwrap();
-        assert!(log.contains("--user enable --now loginux.service") && log.contains("--user disable --now loginux.service"), "{log}");
+        let changes: Vec<&str> = log.lines().filter(|l| l.contains("--now")).collect();
+        let want = ["--user enable --now loginux.service", "--user disable --now loginux.service", "--user enable --now loginux.service"];
+        assert_eq!(changes, want, "one systemctl call per click, none while one runs");
         *w.app.service.lock().unwrap() = Service::Unknown;
         w.run(1);
         assert!(w.has("RUN AT LOGIN") && !w.enabled("RUN AT LOGIN"), "nothing to click before systemd answers");
