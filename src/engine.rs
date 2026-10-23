@@ -1889,6 +1889,12 @@ mod tests {
         assert!(lock(false).unwrap().is_none());
         assert_eq!(owner(), Some(std::process::id()));
         drop(first);
-        assert!(lock(false).unwrap().is_some());
+        // A program another test is starting holds a copy of the lock's descriptor
+        // until it execs; the lock is free once that copy closes.
+        let end = Instant::now() + Duration::from_secs(2);
+        while lock(false).unwrap().is_none() {
+            assert!(Instant::now() < end, "the lock stayed taken after its holder let go");
+            sleep(Duration::from_millis(5));
+        }
     }
 }
