@@ -348,11 +348,8 @@ pub fn load_refused_rates(model: &Model) -> Vec<u32> {
 pub fn save_refused_rates(model: &Model, rates: &[u32]) -> Result<(), String> {
     let list = rates.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
     let text = format!(
-        "# Report rates the {} listed but refused over Linux (HID++ error on the write).
-         # Delete this file to offer them again.
-
-refused = [{list}]
-",
+        "# Report rates the {} listed but refused over Linux (HID++ error on the write).\n\
+         # Delete this file to offer them again.\n\nrefused = [{list}]\n",
         model.name
     );
     write_atomic(&refused_rates_path(model), &text)
