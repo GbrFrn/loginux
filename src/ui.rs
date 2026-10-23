@@ -408,7 +408,8 @@ fn service_state() -> Service {
     let out = systemctl().args(["is-enabled", "loginux.service"]).output();
     match out.as_ref().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()) {
         Ok(s) if s.starts_with("enabled") || s == "linked" => Service::Enabled,
-        Ok(s) if !s.is_empty() => Service::Disabled,
+        // systemd 262 answers `not-found` (exit 4) for a unit it does not have; older ones print nothing
+        Ok(s) if !s.is_empty() && s != "not-found" => Service::Disabled,
         _ => Service::NotInstalled,
     }
 }
@@ -544,6 +545,8 @@ impl App {
             engine_up: false,
         };
         app.refresh_service();
+        // A fresh install gets an empty colour profile, which the list puts before the presets.
+        profile::first_run(model);
         app.reload_list();
         let first = profile::active().filter(|a| app.names.contains(a)).or_else(|| app.names.first().cloned());
         if let Some(name) = first {
@@ -790,7 +793,7 @@ impl App {
         let (resp, group) = login_switch(ui, pos2(r.max.x - 22.0, r.center().y), service);
         let resp = resp.on_hover_text(match service {
             Service::NotInstalled => {
-                "Install systemd/loginux.service into ~/.config/systemd/user/ (see README) to keep lighting after this window closes."
+                "Install systemd/loginux.service into ~/.config/systemd/user/ (see Run at login in docs/usage.md) to keep lighting after this window closes."
             }
             Service::Enabled => {
                 "On: loginux.service starts at every login and keeps the lighting applied. Click to turn it off; the lighting then stays only while this window is open."
@@ -918,11 +921,13 @@ impl App {
     }
 
     fn status_block(&mut self, ui: &mut Ui) {
+        // Without "Logitech " the line fits the 236pt column on one row.
+        let short = |name: &str| name.strip_prefix("Logitech ").unwrap_or(name).to_string();
         let (dev, dev_ink, detail) = match &self.status {
             Err(e) => ("NO ENGINE".to_string(), AMBER, e.clone()),
             Ok(s) => match &s.device {
-                Device::Connected { path, .. } => ("CONNECTED".to_string(), GREEN, format!("G316 X 98 on {path}")),
-                Device::Missing => ("NOT CONNECTED".to_string(), LABEL, "Plug the G316 X 98 in; loginux picks it up.".into()),
+                Device::Connected { name, path, .. } => ("CONNECTED".to_string(), GREEN, format!("{} on {path}", short(name))),
+                Device::Missing => ("NOT CONNECTED".to_string(), LABEL, format!("Plug the {} in; loginux picks it up.", short(&self.model.name))),
                 Device::NoAccess { error } => ("NO ACCESS".to_string(), AMBER, error.clone()),
                 Device::Failed { error } => ("KEYBOARD ERROR".to_string(), AMBER, error.clone()),
             },
@@ -1298,15 +1303,17 @@ impl App {
         let active = self.status().and_then(|s| s.active.clone()).or_else(profile::active);
         let in_use = active.as_deref() == Some(name.as_str());
         let built_in = self.built_in.contains(&name);
+        // While a confirm is open its yes is the one red button here.
+        let save_look = if self.confirm.is_some() { Look::Outline } else { Look::Primary };
         ui.horizontal(|ui| {
             if built_in {
-                if button(ui, "SAVE AS NEW", Look::Primary, dirty)
+                if button(ui, "SAVE AS NEW", save_look, dirty)
                     .on_hover_text("Built-in presets stay as they are; name your version in the left column")
                     .clicked()
                 {
                     self.new_name = Some(String::new());
                 }
-            } else if button(ui, "SAVE", Look::Primary, dirty).clicked() {
+            } else if button(ui, "SAVE", save_look, dirty).clicked() {
                 self.save();
             }
             if button(ui, "REVERT", Look::Quiet, dirty).clicked() {
@@ -1446,7 +1453,7 @@ impl App {
         row(ui, "GAME MODE", game, "Read only; the keyboard's game-mode key sets it");
         let rate = controls.report_rate.map_or("NOT REPORTED".into(), |hz| format!("{hz} HZ"));
         let kept = controls.report_rate_kept.filter(|k| !controls.report_rate_refused.contains(k));
-        let note = kept.map_or_else(|| "Changes only when you choose a rate".into(), |k| format!("Set back to {k} Hz after every reconnect"));
+        let note = kept.map_or_else(|| "Changes only when you choose a rate".into(), |k| format!("Kept at {k} Hz across reconnects"));
         row(ui, "REPORT RATE", &rate, &note);
         row(ui, "VOLUME KNOB", "MEDIA KEYS", "Linux handles volume and mute itself");
 
@@ -1476,7 +1483,7 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 body(
                     ui,
-                    format!("Change the report rate to {hz} Hz? The keyboard may disconnect and come back. Loginux keeps this rate and sets it again whenever the keyboard reconnects, as G HUB does."),
+                    format!("Change the report rate to {hz} Hz? The keyboard may disconnect and come back. Loginux keeps this rate and sets it again if the keyboard comes back at another one, as G HUB does."),
                     AMBER,
                     13.0,
                 );
@@ -1504,7 +1511,7 @@ impl App {
         for text in [
             "Loginux reads these from the keyboard each time it connects, every two seconds after, and at once when the keyboard reports a brightness change.",
             "Brightness and game mode are read only until their commands are verified on this keyboard.",
-            "A report-rate change is sent when you confirm it, and Loginux reads the rate back, waiting for the keyboard if it reconnects. The keyboard forgets the rate when it reconnects, so Loginux sends the rate you chose again then, as G HUB does, and stops if the keyboard drops off right after three of those in ten minutes.",
+            "A report-rate change is sent when you confirm it, and Loginux reads the rate back, waiting for the keyboard if it reconnects. The keyboard can come back at its own rate after a reconnect, so Loginux sends the rate you chose again then, as G HUB does, and stops if the keyboard drops off right after three of those in ten minutes.",
             "For each change, Loginux switches the keyboard's profile management to host mode, as G HUB does, and back to onboard mode right after.",
         ] {
             body(ui, text, TEXT2, 13.0);
@@ -1529,7 +1536,7 @@ impl App {
         }
     }
 
-    /// How much of the map the channel check has confirmed, as the meta line says it.
+    /// How much of the map the channel check has confirmed, as SETTINGS shows it.
     fn checked(&self) -> String {
         let model = self.model;
         let mapped = model.zones.iter().filter(|z| z.kind != Kind::Unknown).count();
@@ -2802,13 +2809,14 @@ mod tests {
     }
 
     /// The proof marks one frame paints: green or amber squares of 3 points.
-    fn proof_marks(w: &mut Window) -> usize {
-        fn count(shapes: &[egui::Shape]) -> usize {
+    /// The rectangles one frame paints that match `want`.
+    fn painted(w: &mut Window, want: impl Fn(&egui::epaint::RectShape) -> bool) -> usize {
+        fn count(shapes: &[egui::Shape], want: &dyn Fn(&egui::epaint::RectShape) -> bool) -> usize {
             shapes
                 .iter()
                 .map(|s| match s {
-                    egui::Shape::Vec(inner) => count(inner),
-                    egui::Shape::Rect(r) if (r.fill == GREEN || r.fill == AMBER) && (r.rect.width() - 3.0).abs() < 0.5 => 1,
+                    egui::Shape::Vec(inner) => count(inner, want),
+                    egui::Shape::Rect(r) if want(r) => 1,
                     _ => 0,
                 })
                 .sum()
@@ -2817,7 +2825,25 @@ mod tests {
         let (app, frame) = (&mut w.app, &mut w.frame);
         let mut out = w.ctx.run_ui(input, |ui| app.ui(ui, frame));
         out.textures_delta.clear();
-        count(&out.shapes.into_iter().map(|c| c.shape).collect::<Vec<_>>())
+        count(&out.shapes.into_iter().map(|c| c.shape).collect::<Vec<_>>(), &want)
+    }
+
+    fn proof_marks(w: &mut Window) -> usize {
+        painted(w, |r| (r.fill == GREEN || r.fill == AMBER) && (r.rect.width() - 3.0).abs() < 0.5)
+    }
+
+    #[test]
+    fn a_confirm_leaves_one_red_button() {
+        let _serial = crate::testenv::serial();
+        scratch_profile("T one red", [0, 0, 255]);
+        let mut w = Window::open();
+        w.click("T one red");
+        w.app.work.zones.insert(38, [1, 2, 3]); // unsaved, so SAVE is live
+        // Red fills taller than the switch track, the tab underline and bitmap cells.
+        let red = |r: &egui::epaint::RectShape| (r.fill == RED || r.fill == RED_HOT) && r.rect.height() > 20.0;
+        assert_eq!(painted(&mut w, red), 1, "SAVE");
+        w.app.confirm = Some(Confirm::Close);
+        assert_eq!(painted(&mut w, red), 1, "SAVE AND CLOSE only; SAVE steps down to an outline");
     }
 
     #[test]
@@ -3300,7 +3326,7 @@ mod tests {
         w.click("CHANGE RATE");
         w.until("the change waits for the keyboard", |w| w.has("Waiting for the keyboard to confirm 2000 Hz\u{2026}"));
         w.until("the rate reads back", |w| w.has("Report rate read back as 2000 Hz."));
-        w.until("the rate is kept", |w| w.has("Set back to 2000 Hz after every reconnect"));
+        w.until("the rate is kept", |w| w.has("Kept at 2000 Hz across reconnects"));
         kb.state().refuse_rate = Some((5, 2));
         w.click("4000 HZ");
         w.click("CHANGE RATE");
@@ -3347,6 +3373,7 @@ mod tests {
         w.until("the mouse connects", |w| w.app.connected_zones().is_some());
         w.run(1);
         assert!(noticed(&w, "The connected keyboard is a Logitech G903 HERO"));
+        assert!(w.has("G903 HERO on /dev/fake-ui-mouse"), "the status names the device that is connected");
         assert!(w.has("WAVE") && !w.enabled("WAVE") && w.enabled("BREATHE"));
         w.click("SETTINGS");
         w.run(1);

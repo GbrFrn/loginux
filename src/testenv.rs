@@ -25,6 +25,9 @@ pub fn init() -> &'static Path {
         let devices = root.join("config/loginux/devices");
         std::fs::create_dir_all(&devices).expect("scratch config folder");
         std::fs::create_dir_all(root.join("run")).expect("scratch runtime folder");
+        // profiles/ exists from the start, as after a first run, so no editor test
+        // gets profile::first_run's profile; that one is tested on its own folder.
+        std::fs::create_dir_all(root.join("config/loginux/profiles")).expect("scratch profiles folder");
         // A user definition, a broken one and a stray file, so loading them is tested.
         let pad = "name = \"Test Pad\"\nprotocol = \"hidpp20\"\nlighting = \"clusters\"\nvendor = 0x046d\n\
                    product = 0xffff\ninterface = 2\nboard = [2, 2]\n\

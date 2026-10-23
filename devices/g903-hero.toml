@@ -2,7 +2,7 @@
 # described in CONTRIBUTING.md and the evidence in research/g903.md.
 #
 # The mouse has no per-key lighting: it reports two 0x8071 clusters, and the
-# light below is cluster 1, the G logo, painted with the Static effect in RAM.
+# light below is cluster 1, the G logo, set to Static, Cycle or Breathe in RAM.
 # Cluster 0 is the DPI indicator, the three LEDs under the DPI buttons. Its
 # firmware decides which of those LEDs are on, and a host cannot light them,
 # so this definition leaves it out. Claiming the lighting still takes every

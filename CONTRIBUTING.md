@@ -92,8 +92,9 @@ not get silently ignored.
 A device without `0x8081` sets `lighting = "clusters"` and lists one light per
 `0x8071` cluster in place of keys. `zone` is the cluster index from the probe's
 `0x8071 cluster N` lines, and Loginux paints each light with that cluster's
-Static effect. Such a definition has no `unknown` and no `[[strip]]`. The probe
-prints no starting definition for it, so write the file from those lines.
+Static effect. Such a definition has no `unknown` and no `[[strip]]`. For such
+a device the probe prints a starting definition with one light per lighting
+cluster, named `light0`, `light1` and so on in a row; rename and place them.
 
 ```toml
 lighting = "clusters"

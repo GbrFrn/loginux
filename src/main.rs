@@ -43,15 +43,15 @@ Usage:
   loginux paint ZONE=RRGGBB... [--base RRGGBB] [--hold SECS | --keep]
                                   paint keys (esc, f1, kp5, leftshift), bar1..bar30 or zone IDs
   loginux release                    hand the lighting back to the keyboard's onboard effects
-  loginux rate [HZ]                  show the report rate, or change it (the keyboard reconnects)
+  loginux rate [HZ]                  show the report rate, or change and keep it (the keyboard may reconnect)
   loginux effect CLUSTER=EFFECT[,param=value]... [--hold SECS | --keep]
                                      run a built-in effect (static, cycle, breathe, wave, ripple)
                                      on a lighting cluster, by number or light name
   loginux probe --device /dev/hidrawN
-                                  read-only: print a starting definition for a new keyboard
+                                  read-only: print a starting definition for a new device
 
 Options:
-  --device /dev/hidrawN           use this node; it must be a known keyboard's HID++ interface
+  --device /dev/hidrawN           use this node; it must be a known device's HID++ interface
 
 Profiles are ~/.config/loginux/profiles/NAME.toml. Nothing is written to the keyboard's
 flash, and unplugging the keyboard always restores its onboard lighting.
@@ -407,8 +407,12 @@ fn probe(device: Option<PathBuf>) -> Result<(), String> {
     for line in &p.lighting {
         eprintln!("{line}");
     }
+    if p.rgb_effects && !p.per_key && p.clusters.iter().any(|c| c.1 == 0) {
+        print!("{}", cluster_definition(&p));
+        return Ok(());
+    }
     if !(p.rgb_effects && p.per_key) {
-        eprintln!("no starting definition: Loginux drives devices with 0x8071 RGB effects and 0x8081 per-key lighting");
+        eprintln!("no starting definition: Loginux needs 0x8071 RGB effects, with 0x8081 per-key lighting or a lighting cluster");
         return Ok(());
     }
     // 0x8081 zones follow HID keyboard usages minus 3 (modifiers 104-111) on the
@@ -456,6 +460,41 @@ keys = [
         p.interface,
     );
     Ok(())
+}
+
+/// A starting definition for a device without 0x8081: one light per lighting
+/// cluster, in a row. A status display is left out, as the G903's DPI LEDs are.
+fn cluster_definition(p: &device::Probe) -> String {
+    let name = if p.hid_name.is_empty() { "New device".to_string() } else { p.hid_name.clone() };
+    let (mut lights, mut notes, mut x) = (String::new(), String::new(), 0);
+    for &(cluster, modes) in &p.clusters {
+        if modes != 0 {
+            notes += &format!("# Cluster {cluster} is a status display (event modes {modes:02x}) whose firmware picks its LEDs; it is left out.\n");
+            continue;
+        }
+        lights += &format!("  {{ name = \"light{cluster}\", zone = {cluster}, at = [{x}, 0] }},\n");
+        x += 2;
+    }
+    format!(
+        "# Starting definition from `loginux probe` ({}). One light per 0x8071 cluster;
+# the names and positions are placeholders: light each one, then name and place
+# it. See CONTRIBUTING.md, Cluster devices.
+{notes}name = \"{name}\"
+protocol = \"hidpp20\"
+lighting = \"clusters\"
+vendor = {:#06x}
+product = {:#06x}
+interface = {}
+board = [{x}, 1]
+
+lights = [
+{lights}]
+",
+        profile::today(),
+        p.vendor,
+        p.product,
+        p.interface,
+    )
 }
 
 /// `loginux rate` shows the report rate; `loginux rate HZ` changes it, once, at the
@@ -784,9 +823,25 @@ mod tests {
         assert!(run("probe --device /dev/null").unwrap_err().contains("disconnected"));
         busy("probe --device /dev/null");
         let _mouse = fake::plug("/dev/fake-probe-mouse", "g903-hero", fake::g903());
-        run("probe --device /dev/fake-probe-mouse").unwrap(); // no per-key lighting: no definition
+        run("probe --device /dev/fake-probe-mouse").unwrap(); // no per-key lighting: a cluster definition
         let _kb = fake::plug("/dev/fake-probe-keys", "g316-x-98", fake::g316());
         run("probe --device /dev/fake-probe-keys").unwrap();
+        // Only a status display: nothing to paint, so no definition.
+        let mut dark = fake::g903();
+        dark.clusters.retain(|c| c.1 != 0);
+        let _dark = fake::plug("/dev/fake-probe-dark", "g903-hero", dark);
+        run("probe --device /dev/fake-probe-dark").unwrap();
+    }
+
+    #[test]
+    fn a_cluster_device_gets_a_definition_that_loads() {
+        let _mouse = fake::plug("/dev/fake-probe-def", "g903-hero", fake::g903());
+        let text = cluster_definition(&device::probe(std::path::Path::new("/dev/fake-probe-def")).unwrap());
+        let m = layout::Model::parse("probed", &text).unwrap();
+        assert!(!m.per_key && (m.vendor, m.product, m.interface) == (0x046d, 0xc091, 2));
+        let lights: Vec<_> = m.zones.iter().map(|z| (z.id, z.name.as_str())).collect();
+        assert_eq!(lights, [(1, "light1")], "the DPI status display, cluster 0, is left out");
+        assert!(text.contains("# Cluster 0 is a status display (event modes 07)"));
     }
 
     #[test]

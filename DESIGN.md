@@ -256,7 +256,7 @@ Square everywhere: corner radius 0 on windows, menus, widgets, buttons, boxes, f
 ### Buttons
 Bitmap caps in a snapped rectangle, sized to the label plus 24 x 18pt.
 - **Shape:** square (0), 2pt edge drawn inside.
-- **Primary:** Signal Red fill, Ground label, no edge; hover Signal Red Hot. One per context: SAVE (SAVE AS NEW on a built-in preset), TAKE OVER, a confirm's yes such as CHANGE RATE.
+- **Primary:** Signal Red fill, Ground label, no edge; hover Signal Red Hot. One per context: SAVE (SAVE AS NEW on a built-in preset), TAKE OVER, a confirm's yes such as CHANGE RATE. While a confirm is open, SAVE steps down to Outline, so the confirm's yes is the one red button there.
 - **Outline:** transparent with a Text edge and Text label; hover Raised, pressed Rule. For committing actions such as RELEASE LIGHTING, USE THIS PROFILE, CREATE, OPEN CHANNEL CHECK, a run's CHECK button, NOTHING LIT and NOT ON THE MAP.
 - **Quiet:** transparent with a Rule edge and Secondary Text label; hover Raised with Text label. For secondary and reversible actions (REVERT, DELETE, SKIP, selection presets) and for the options in the LIGHTING, DIRECTION and SET RATE rows.
 - **Current choice:** in a row of options the chosen one is not a button but an 8pt Secondary Text square beside its label in Label caps, Secondary Text; IN USE among the actions uses the same mark.

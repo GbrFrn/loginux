@@ -44,8 +44,9 @@ const CONTROLS_EVERY: Duration = Duration::from_secs(2);
 const RATE_READBACK: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(5) };
 /// After this long without the keyboard, a rate change is reported as failed.
 const RATE_GIVE_UP: Duration = Duration::from_secs(20);
-/// The keyboard does not save its report rate, so the engine sends the rate the
-/// user chose again when the keyboard connects at another one, as G HUB does.
+/// The keyboard can come back at its own report rate after a reconnect, so the
+/// engine sends the rate the user chose again when it connects at another one,
+/// as G HUB does.
 /// A send the keyboard drops off within RESTORE_SETTLE of looks like the write
 /// making it leave: after RESTORES of those in RESTORE_WINDOW the engine stops
 /// sending until the user chooses a rate, so it cannot loop. Replugs after the
@@ -640,8 +641,8 @@ impl Engine {
         }
     }
 
-    /// Sends the kept rate again when the keyboard connected at another one: it
-    /// does not save a rate, so it comes back at its own after every reconnect.
+    /// Sends the kept rate again when the keyboard connected at another one, as
+    /// it can after a reconnect.
     fn restore_rate(&mut self) {
         let link = self.link.as_ref().expect("called on a new link");
         let (Some((_, current)), Some(hz)) = (&link.rates, link.kept) else { return };
@@ -1392,7 +1393,7 @@ mod tests {
         assert_eq!(sets(&fake), 1, "a refusal is never retried");
         e.link.as_mut().unwrap().next_controls = Instant::now();
         e.step().unwrap();
-        assert_eq!(e.status().controls.unwrap().report_rate_refused, [8000], "the ten-second re-read keeps it"); 
+        assert_eq!(e.status().controls.unwrap().report_rate_refused, [8000], "the two-second re-read keeps it"); 
         assert!(matches!(e.handle(Request::SetReportRate { hz: 1234 }), Reply::Err(_)));
         ok(e.handle(Request::SetReportRate { hz: 1000 }));
         assert!(matches!(e.status().rate_change, Some(RateChange::Done { hz: 1000 })), "already at that rate");

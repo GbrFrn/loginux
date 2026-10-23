@@ -46,6 +46,8 @@ across the board, then set the colour with the picker, the hex field or the
 RGB values. The keyboard follows while you paint. SAVE writes the profile;
 USE THIS PROFILE makes it the one Loginux keeps applied. RELEASE LIGHTING
 hands the keyboard back to its onboard effects and unsets the chosen profile.
+The first time it starts, the editor creates an empty profile, My lighting,
+and opens it, so there is a board to paint right away.
 
 The lettering is drawn on whole device pixels, so it stays sharp at any
 display scale; `LOGINUX_UI_ZOOM=1.25 loginux` enlarges the window's contents
@@ -103,7 +105,7 @@ Plasma: System Settings, Notifications, Configure for Applications).
 | `loginux release` | Hands the lighting back to the keyboard now; through a running engine it also unsets the chosen profile, like `use --none` |
 | `loginux rate [HZ]` | Shows the report rate, or changes it, reads it back and keeps it (the keyboard may reconnect) |
 | `loginux run [--refresh S]` | The engine: keeps the profile applied; the service runs this |
-| `loginux probe --device /dev/hidrawN` | Read-only: prints a starting definition for a new keyboard |
+| `loginux probe --device /dev/hidrawN` | Read-only: prints a starting definition for a new device |
 
 `--device /dev/hidrawN` picks the node by hand; Loginux checks that it really
 is the HID++ interface of a known device before sending anything, except

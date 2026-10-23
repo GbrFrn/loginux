@@ -2,7 +2,7 @@
 
 pkgname=loginux-git
 _pkgname=loginux
-pkgver=0.1.0.r6.g5ed2629
+pkgver=0.1.5.r51.g6a42a4d
 pkgrel=1
 pkgdesc='RGB lighting for Logitech HID++ keyboards and mice, with a tray icon'
 arch=('x86_64' 'aarch64')

@@ -25,8 +25,9 @@ pub enum Request {
     Check { zone: Option<u8> },
     /// Take the lighting from another program that holds it.
     TakeOver,
-    /// Change the report rate. Sent only on an explicit user action; the keyboard
-    /// can re-enumerate, and the engine reads the rate back after it returns.
+    /// Change the report rate to one the user chose; the engine keeps it. The
+    /// keyboard can re-enumerate, and the engine reads the rate back after it
+    /// returns.
     SetReportRate { hz: u32 },
 }
 

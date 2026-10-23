@@ -309,7 +309,7 @@
       "name": "Primary Button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "One primary action per context: SAVE (SAVE AS NEW on a built-in preset), TAKE OVER, a confirm's yes such as CHANGE RATE.",
+      "description": "One primary action per context: SAVE (SAVE AS NEW on a built-in preset), TAKE OVER, a confirm's yes such as CHANGE RATE. SAVE steps down to an outline while a confirm is open.",
       "html": "<button class=\"ds-btn-primary\">SAVE</button>",
       "css": ".ds-btn-primary { font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-weight: 700; font-size: 10px; padding: 9px 12px; border-radius: 0; cursor: pointer; } .ds-btn-primary { background: #FF2E3F; color: #0B0B0C; border: none; } .ds-btn-primary:hover { background: #FF5765; } .ds-btn-primary:active { background: #FF2E3F; } .ds-btn-primary:focus-visible { outline: 2px solid #FF2E3F; outline-offset: 3px; } .ds-btn-primary:disabled { background: transparent; color: #4A4A50; cursor: default; }"
     },

@@ -4,10 +4,12 @@
 //! always carries persistence 0x01 (apply in RAM, flash-save bit clear) and
 //! FrameEnd carries 0x00, so no lighting request can ask the keyboard to write
 //! its flash; manageNvConfig (0x8071/3) passes only in its get form, because its
-//! set form writes EEPROM. The one device-setting write is the report rate
-//! (0x8061/3): it is sent only when the user asks for a rate, the keyboard may keep it, and the
-//! USB device can re-enumerate. Brightness and game mode are read only. DFU,
-//! reset and engineering features are never resolved or called.
+//! set form writes EEPROM. The one device setting written is the report rate
+//! (0x8061/3), with the 0x8101/6 host-mode switch around it: the rate the user
+//! chose, sent when they choose it and again when the keyboard reconnects at
+//! another rate. The USB device can re-enumerate at the write. Brightness and
+//! game mode are read only. DFU, reset and engineering features are never
+//! resolved or called.
 
 use crate::hidpp::{self, BUSY, Call, Error, Hidpp};
 use crate::layout::Model;
@@ -47,7 +49,7 @@ const ALLOWED: &[(u16, u8)] = &[
     (BRIGHTNESS, 1),  // getBrightness
     (REPORT_RATE, 1), // getReportRateList: supported-rate bitmap
     (REPORT_RATE, 2), // getReportRate
-    (REPORT_RATE, 3), // setReportRate: explicit user request only, never retried
+    (REPORT_RATE, 3), // setReportRate: the rate the user chose; a lost reply is read back, not resent
     (PROFILE_MANAGEMENT, 6), // host or onboard mode, around a rate change only; never profile memory
     (GAME_MODE, 0),   // getGameMode
     // `loginux probe` only, all getters:
@@ -128,6 +130,9 @@ pub struct Probe {
     pub per_key: bool,
     pub layout: Option<u8>,
     pub zones: Vec<u8>,
+    /// 0x8071 clusters: (index, event-display modes). Modes other than 0 mark a
+    /// status display, such as a G903's DPI LEDs, whose firmware picks the LEDs.
+    pub clusters: Vec<(u8, u8)>,
     /// (index, feature ID, type flags, version) from IFeatureSet.
     pub features: Vec<(u8, u16, u8, u8)>,
     /// Lighting getters, as labelled raw replies for research notes.
@@ -170,6 +175,7 @@ fn probe_on(io: Hidpp, path: &Path, identity: (u16, u16, u8, String)) -> Result<
     }
     let hex = |r: &[u8]| r.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
     let mut lighting = vec![];
+    let mut clusters = vec![];
     if let Some(index) = rgb {
         // 0x8071 getInfo: clusters, then each cluster's effects (ID, capabilities, period).
         let info = kb.call(RGB_EFFECTS, index, 0, &[0xFF, 0xFF, 0])?;
@@ -177,6 +183,7 @@ fn probe_on(io: Hidpp, path: &Path, identity: (u16, u16, u8, String)) -> Result<
         for cluster in 0..info[2] {
             let c = kb.call(RGB_EFFECTS, index, 0, &[cluster, 0xFF, 0])?;
             lighting.push(format!("0x8071 cluster {cluster}: {}", hex(&c[..8])));
+            clusters.push((cluster, c[5]));
             for e in 0..c[4] {
                 let r = kb.call(RGB_EFFECTS, index, 0, &[cluster, e, 0])?;
                 lighting.push(format!("0x8071 cluster {cluster} effect {e}: {}", hex(&r[..10])));
@@ -233,6 +240,7 @@ fn probe_on(io: Hidpp, path: &Path, identity: (u16, u16, u8, String)) -> Result<
         per_key: per_key.is_some(),
         layout,
         zones,
+        clusters,
         features,
         lighting,
     })
@@ -451,7 +459,7 @@ impl Keyboard {
         Ok(Some((supported, current)))
     }
 
-    /// 0x8061/3, sent once. Only for an explicit user request: the keyboard can
+    /// 0x8061/3, sent once, for the rate the user chose: the keyboard can
     /// re-enumerate before it answers, so a lost reply means "unknown", and the
     /// caller reads the rate back instead of sending it again.
     pub fn set_report_rate(&mut self, rate_index: u8) -> Result<(), Error> {
@@ -459,7 +467,7 @@ impl Keyboard {
         // With 0x8101 profile management the write is refused (HID++ error 2) until
         // the host takes over, as G HUB does before its rate writes. Control goes
         // straight back to the firmware, as Solaar does on release; the new rate
-        // stays until the keyboard reconnects.
+        // stays at least until the keyboard reconnects.
         let profiles = self.optional.profiles;
         if let Some(p) = profiles {
             self.call(PROFILE_MANAGEMENT, p, 6, &[PROFILES_HOST])?;
@@ -619,6 +627,7 @@ mod tests {
         let p = probe_on(io, Path::new("/dev/fake"), (0x046d, 0xc091, 2, "G903".into())).unwrap();
         assert_eq!((p.vendor, p.product, p.interface, p.protocol), (0x046d, 0xc091, 2, (4, 2)));
         assert!(p.rgb_effects && !p.per_key && p.zones.is_empty() && p.layout.is_none());
+        assert_eq!(p.clusters, [(0, 0x07), (1, 0)], "cluster 0 is the DPI status display");
         assert_eq!((p.features.len(), p.features[6]), (11, (7, 0x8071, 0, 0)));
         let lines = p.lighting.join("\n");
         for want in [

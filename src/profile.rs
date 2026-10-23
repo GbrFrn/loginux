@@ -218,6 +218,25 @@ pub fn save(model: &Model, name: &str, profile: &Profile) -> Result<(), String> 
     write_atomic(&path(name)?, &profile.to_toml(model))
 }
 
+/// The profile a fresh install opens: an empty colour profile, so the editor
+/// starts on the keys instead of a built-in effect.
+const FIRST: &str = "My lighting";
+
+/// Saves FIRST and returns its name on the first start after an install, when
+/// the profiles folder does not exist yet. Someone who later deletes every
+/// profile keeps the folder and is not given a new one.
+pub fn first_run(model: &Model) -> Option<String> {
+    first_run_in(&profiles_dir(), model)
+}
+
+fn first_run_in(dir: &Path, model: &Model) -> Option<String> {
+    if dir.exists() {
+        return None;
+    }
+    write_atomic(&dir.join(format!("{FIRST}.toml")), &Profile::default().to_toml(model)).ok()?;
+    Some(FIRST.into())
+}
+
 pub fn delete(name: &str) -> Result<(), String> {
     if built_in(name) {
         return Err(format!("{name} is built in"));
@@ -332,9 +351,9 @@ pub fn today() -> String {
 }
 
 /// Report rates remembered per model: the rate the user chose, which the engine
-/// sends again when the keyboard reconnects at another rate (the keyboard does
-/// not save it), and rates the device refused (HID++ error on the write), which
-/// the editor does not offer again.
+/// sends again when the keyboard reconnects at another rate, and rates the
+/// device refused (HID++ error on the write), which the editor does not offer
+/// again.
 pub fn rates_path(model: &Model) -> PathBuf {
     config_dir().join("rates").join(format!("{}.toml", model.id))
 }
@@ -623,5 +642,16 @@ mod tests {
         let d = today();
         let parts: Vec<u32> = d.split('-').map(|p| p.parse().unwrap()).collect();
         assert!(parts[0] >= 2026 && (1..=12).contains(&parts[1]) && (1..=31).contains(&parts[2]), "{d}");
+    }
+
+    #[test]
+    fn a_fresh_install_gets_an_empty_colour_profile_once() {
+        let model = &layout::models()[0];
+        let dir = crate::testenv::init().join("fresh-install/profiles");
+        assert_eq!(first_run_in(&dir, model).as_deref(), Some(FIRST));
+        let p = read(model, &dir.join(format!("{FIRST}.toml"))).unwrap();
+        assert_eq!(p, Profile::default(), "colours, nothing painted, no effect");
+        assert_eq!(first_run_in(&dir, model), None, "only while the folder is missing");
+        assert_eq!(first_run(model), None, "the tests' config has profiles/ from the start");
     }
 }

@@ -28,9 +28,9 @@ Loginux editor turns them into live evidence.
 ## Mapping a new device
 
 1. `loginux probe --device /dev/hidrawN` reads the device's HID++ version,
-   its lighting features and the zones it accepts, and, for a keyboard with
-   `0x8081` per-key lighting, prints a starting definition. It sends read
-   requests only.
+   its lighting features and the zones it accepts, and prints a starting
+   definition: keys for a device with `0x8081` per-key lighting, else one
+   light per lighting cluster. It sends read requests only.
 2. Run a channel check in the editor. Loginux lights one zone at a time, and
    you record what lit. The answers are saved as live evidence for that
    model.
