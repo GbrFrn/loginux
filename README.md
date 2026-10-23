@@ -7,7 +7,7 @@
 <p align="center">Per-key RGB lighting for Logitech keyboards and mice on Linux.</p>
 
 <p align="center">
-  <a href="https://aur.archlinux.org/packages/loginux-git"><img alt="AUR package" src="https://img.shields.io/aur/version/loginux-git?label=AUR"></a>
+  <a href="https://github.com/GbrFrn/loginux/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/GbrFrn/loginux"></a>
   <a href="#licence"><img alt="Licence: MIT OR Apache-2.0" src="https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue"></a>
   <img alt="Platform: Linux" src="https://img.shields.io/badge/platform-Linux-informational">
   <img alt="Written in Rust" src="https://img.shields.io/badge/written%20in-Rust-orange">
@@ -38,10 +38,12 @@ device's RAM, so unplugging it always brings back the onboard lighting.
 
 ## Install
 
-On Arch Linux, CachyOS and other Arch-based systems:
+On Arch Linux, CachyOS and other Arch-based systems, build the package from
+this repository (an AUR package will follow once AUR registration reopens):
 
 ```sh
-paru -S loginux-git                              # or: yay -S loginux-git
+git clone https://github.com/GbrFrn/loginux
+cd loginux/packaging/aur && makepkg -si
 systemctl --user enable --now loginux.service    # keeps a profile applied, shows the tray icon
 ```
 
