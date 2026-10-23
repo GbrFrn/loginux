@@ -232,7 +232,7 @@ A fixed three-column instrument under a header. The window opens at 1360 x 840pt
 
 - **Header:** 64pt tall on Ground, closed by a 2pt Text-coloured rule. Wordmark 22pt from the left; tabs 36pt after it, 34pt apart, hit areas padded 8pt; the RUN AT LOGIN switch 22pt from the right; the dot patch (192 x 30pt) sits 22pt left of it and drops out when the tabs need the room.
 - **Left column:** 236pt wide with 16pt margins on Ground: profiles in 48pt ruled boxes, then a rule and the connection status block pinned to the bottom.
-- **Centre column:** Ground with 24pt margins, scrolling vertically: title, meta line, proof key, then the board at the column's width (at most 1200pt, key unit at most 60pt), then selection and research controls.
+- **Centre column:** Ground with 24pt margins, scrolling vertically: title, meta line (in the channel check, the proof key), then the board at the column's width (at most 1200pt, key unit at most 60pt), then selection and research controls.
 - **Right column:** 316pt wide with 16pt margins on Panel: the specimen of the selection (label, hex, swatch at three sizes), picker, value rows, colour list, then save and use actions.
 - **Column rules:** 2pt Rule-coloured verticals at both column edges, drawn on top of the panels.
 - **Rhythm:** item spacing 8pt by default (7pt in the status block); added gaps step through 2, 4, 6, 10, 12, 14 and 18pt; the board group gets 18pt before and 14pt after.
@@ -286,7 +286,7 @@ Full-width 48pt boxes with a 2pt Rule edge and 10pt inset. The name sits in Smal
 The selection shown as a type specimen: a Label line naming the selection (up to five names, else a zone count), the hex in Hex caps, then the colour as three flat swatches of full width x 72pt, half width x 34pt and one-fifth width x 14pt, split evenly when several colours are selected. With nothing selected, a 72pt dot-matrix patch and one line of instruction take the swatch's place.
 
 ### Keyboard Board (signature)
-The board on a black body with 10pt padding, framed by a 2pt Rule outline set 8pt outside. Keys are inset by a snapped gap of a tenth of a unit (at least 2pt); strip segments touch, separated by a single pixel. Unpainted zones are Dark Key with Secondary Text legends; painted zones show the exact RGB, with a black or white legend picked by luminance. Selection is a 2pt Signal Red outline just outside the key; hover is a 1pt Text outline; the drag marquee is a 1pt red rectangle. Proof marks are 3pt squares, green for observed and amber for differs, explained by the proof key above the board (unmarked means layout data only).
+The board on a black body with 10pt padding, framed by a 2pt Rule outline set 8pt outside. Keys are inset by a snapped gap of a tenth of a unit (at least 2pt); strip segments touch, separated by a single pixel. Unpainted zones are Dark Key with Secondary Text legends; painted zones show the exact RGB, with a black or white legend picked by luminance. Selection is a 2pt Signal Red outline just outside the key; hover is a 1pt Text outline; the drag marquee is a 1pt red rectangle. In the channel check, proof marks are 3pt squares, green for observed and amber for differs, explained by the proof key above the board (unmarked means layout data only). The editing board shows colour only.
 
 ### Status Block
 An 8pt square (Observed Green when connected, Caution Amber for no engine, no access or errors, Label Grey otherwise) beside a Small-caps status word, then Archivo detail lines and the lighting action at the column's foot.

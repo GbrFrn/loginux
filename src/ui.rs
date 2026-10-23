@@ -1505,16 +1505,10 @@ impl App {
         label(ui, &title, TITLE, TEXT);
         ui.add_space(4.0);
         let model = self.model;
+        // Editing state only: what the channel check has proven belongs to the check.
         let live = matches!(self.status().map(|s| &s.control), Some(Control::Preview));
-        let meta = format!(
-            "{}{}{}",
-            if live { "LIVE \u{00b7} " } else { "" },
-            self.checked(),
-            if self.dirty() { " \u{00b7} UNSAVED" } else { "" }
-        );
-        label(ui, &meta, SMALL, if self.dirty() { TEXT } else { LABEL });
-        ui.add_space(6.0);
-        proof_key(ui);
+        let meta = [live.then_some("LIVE"), self.dirty().then_some("UNSAVED")].into_iter().flatten().collect::<Vec<_>>();
+        label(ui, &meta.join(" \u{00b7} "), SMALL, if self.dirty() { TEXT } else { LABEL });
         ui.add_space(18.0);
         if self.open.is_none() {
             body(ui, "Create a profile in the left column to start painting.", TEXT2, 14.0);
@@ -1607,8 +1601,10 @@ impl App {
     }
 
     fn hover_line(&self, ui: &mut Ui) {
+        let checking = self.tab == Tab::Check;
         let Some(id) = self.hover else {
-            label(ui, "HOVER A KEY FOR ITS ZONE, COLOUR AND PROOF", SMALL, LABEL);
+            let hint = if checking { "HOVER A KEY FOR ITS ZONE, COLOUR AND PROOF" } else { "HOVER A KEY FOR ITS ZONE AND COLOUR" };
+            label(ui, hint, SMALL, LABEL);
             return;
         };
         let Some(z) = self.model.zone(id) else { return };
@@ -1619,7 +1615,8 @@ impl App {
             None => "LAYOUT DATA ONLY".into(),
         };
         let name = if z.name.is_empty() { format!("ZONE {id}") } else { z.name.to_uppercase() };
-        label(ui, &format!("{name} \u{00b7} ZONE {id} \u{00b7} {colour} \u{00b7} {proof}"), SMALL, TEXT2);
+        let proof = if checking { format!(" \u{00b7} {proof}") } else { String::new() };
+        label(ui, &format!("{name} \u{00b7} ZONE {id} \u{00b7} {colour}{proof}"), SMALL, TEXT2);
     }
 
     /// Draws the board; returns a click as (zone or empty space, add-to-selection).
@@ -1671,7 +1668,7 @@ impl App {
                     px_text(p, r.min + vec2(4.0, 4.0), legend, LEGEND, ink);
                 }
             }
-            if let Some(seen) = self.checks.get(&z.id) {
+            if checking && let Some(seen) = self.checks.get(&z.id) {
                 let ok = seen.saw == z.name;
                 let m = whole(3.0 * ppp) / ppp;
                 let at = if z.kind == Kind::Strip { pos2(r.center().x - m / 2.0, r.max.y + 3.0) } else { pos2(r.max.x - m - 3.0, r.max.y - m - 3.0) };
@@ -2782,14 +2779,19 @@ mod tests {
         w.click_at(corner);
         assert!(w.app.selection.is_empty(), "a plain click there clears it");
 
-        // Hovering names a key with its proof: checked as expected, checked as different, or layout data only.
+        // In the channel check, hovering names a key with its proof: checked as
+        // expected, checked as different, or layout data only.
         w.app.checks.insert(esc, Seen { saw: "esc".into(), date: "2026-10-22".into() });
         w.app.checks.insert(f1, Seen { saw: "nothing".into(), date: "2026-10-22".into() });
+        w.app.tab = Tab::Check;
+        w.run(1);
         for id in [esc, f1, f2] {
             let at = w.zone(id);
             w.hover(at);
             assert_eq!(w.app.hover, Some(id));
         }
+        w.app.tab = Tab::Edit;
+        w.run(1);
 
         // Dragging from empty board selects what the box touches; with shift it adds.
         let to = w.zone(f1);

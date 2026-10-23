@@ -373,7 +373,7 @@
       "name": "Board Keys",
       "kind": "custom",
       "refersTo": "key-unpainted",
-      "description": "Keys on the black board: Dark Key when unpainted, exact RGB when painted, red outline when selected, 3pt proof mark.",
+      "description": "Keys on the black board: Dark Key when unpainted, exact RGB when painted, red outline when selected, 3pt proof mark in the channel check.",
       "html": "<div class=\"ds-board\"><div class=\"ds-key\">ESC</div><div class=\"ds-key ds-key-lit\" style=\"background:#38D07A\">W<i class=\"ds-proof\"></i></div><div class=\"ds-key ds-key-lit ds-key-sel\" style=\"background:#5B6CFF\">F1</div></div>",
       "css": ".ds-board { display: inline-flex; gap: 4px; padding: 10px; background: #000000; outline: 2px solid #2A2A2E; outline-offset: 8px; } .ds-key { position: relative; width: 38px; height: 38px; background: #1A1A1D; color: #A9A9AE; font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-size: 7px; padding: 4px; box-sizing: border-box; border-radius: 0; } .ds-key:hover { box-shadow: inset 0 0 0 1px #EDEDED; } .ds-key-lit { color: #0B0B0C; } .ds-key-sel { outline: 2px solid #FF2E3F; } .ds-proof { position: absolute; right: 3px; bottom: 3px; width: 3px; height: 3px; background: #3FD07A; }"
     },

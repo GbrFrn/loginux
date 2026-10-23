@@ -105,7 +105,9 @@ remaining gaps are in
    a clean release, and unplug as the lighting fallback. Any device-setting
    write needs an explicit user action and a documented recovery path.
 2. Say what is proven. Observed, from metadata, and unknown stay distinct
-   everywhere.
+   wherever proof is shown: in the channel check, the research notes and the
+   docs. The editor shows colour; proof lives in the channel check (GbrFrn,
+   2026-10-23).
 3. Set once, then stay out of the way.
 4. Research is first-class but fenced: raw zones only by explicit number.
 5. One owner of the device at a time.

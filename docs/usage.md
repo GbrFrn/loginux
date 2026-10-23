@@ -59,9 +59,9 @@ turn on RUN AT LOGIN (it needs the service installed, see below).
 The channel check, under SETTINGS (OPEN CHANNEL CHECK), lights one zone at a
 time, white, with everything else dark. You click where the light appeared, or
 answer that nothing lit or that it lit somewhere not on the map. Answers go to
-`~/.config/loginux/checks/KEYBOARD.toml` and show on the board as marks: green
-where the LED matched the map, amber where it did not. Until a zone is checked,
-its position is layout data and not proof.
+`~/.config/loginux/checks/KEYBOARD.toml` and show on the check's board as
+marks: green where the LED matched the map, amber where it did not. Until a
+zone is checked, its position is layout data and not proof.
 
 ## The tray icon
 
