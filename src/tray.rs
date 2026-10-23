@@ -145,7 +145,7 @@ impl ksni::Tray for Tray {
             .map(|scale| {
                 let (side, rgba) = icon::rgba(scale);
                 // ARGB32 in network byte order.
-                let data = rgba.chunks_exact(4).flat_map(|p| [p[3], p[0], p[1], p[2]]).collect();
+                let data = rgba.as_chunks::<4>().0.iter().flat_map(|&[r, g, b, a]| [a, r, g, b]).collect();
                 Icon { width: side as i32, height: side as i32, data }
             })
             .collect()
