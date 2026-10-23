@@ -9,9 +9,9 @@ their own tool.
   bar and the dot screen.
 - [g903.md](g903.md): the G903 mouse: features, its two lighting clusters,
   and why its DPI indicator stays dark under host control.
-- [g316-extra-controls.md](g316-extra-controls.md): usable G316 brightness,
-  report-rate, game-mode and media-control evidence beyond Loginux's current
-  per-key RGB support, with the write boundary for each.
+- [g316-extra-controls.md](g316-extra-controls.md): G316 brightness, report
+  rate, game mode and media keys: the evidence, the write boundary for each,
+  and what Loginux does with them.
 
 ## Evidence labels
 
@@ -28,8 +28,9 @@ Loginux editor turns them into live evidence.
 ## Mapping a new device
 
 1. `loginux probe --device /dev/hidrawN` reads the device's HID++ version,
-   its lighting features and the zones it accepts, and prints a starting
-   definition. It sends read requests only.
+   its lighting features and the zones it accepts, and, for a keyboard with
+   `0x8081` per-key lighting, prints a starting definition. It sends read
+   requests only.
 2. Run a channel check in the editor. Loginux lights one zone at a time, and
    you record what lit. The answers are saved as live evidence for that
    model.

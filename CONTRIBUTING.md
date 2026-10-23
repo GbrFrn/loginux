@@ -6,19 +6,20 @@ Loginux drives Logitech keyboards that speak HID++ 2.0 and report two features:
 `0x8071` (RGB effects) and `0x8081` (per-key lighting). Such a keyboard needs
 no code, only a definition file; so does a device with `0x8071` alone, such as
 a mouse (see [Cluster devices](#cluster-devices)). Other devices need a
-protocol backend; see the last section.
+protocol backend; see [Adding a protocol](#adding-a-protocol).
 
 1. **Give your user access to the keyboard's HID++ interface.** Find its
    hidraw node with `udevadm info /dev/hidrawN`: look for your keyboard's
    `ID_VENDOR_ID` and `ID_MODEL_ID`, and note `ID_USB_INTERFACE_NUM`. Add a
    line for it to `udev/70-loginux.rules` and install the rule as
-   [docs/usage.md](docs/usage.md#install-from-source) describes. Tag only the HID++ interface; the interfaces that carry
-   keystrokes must stay root-only.
+   [docs/usage.md](docs/usage.md#install-from-source) describes. Tag only the
+   HID++ interface; the interfaces that carry keystrokes must stay root-only.
 
 2. **Probe it.** This sends only read requests and prints a starting
    definition:
 
    ```sh
+   mkdir -p ~/.config/loginux/devices
    loginux probe --device /dev/hidrawN > ~/.config/loginux/devices/my-keyboard.toml
    ```
 
@@ -27,12 +28,14 @@ protocol backend; see the last section.
    keyboard usage minus 3, and the modifiers are 104 to 111. The positions are
    a placeholder grid.
 
-3. **Check every zone on the keyboard.** Run `loginux`, open SETTINGS, then OPEN
-   CHANNEL CHECK, and
-   check all keys and the unknown zones. Loginux lights one zone at a time;
-   click the key that lit, or answer NOTHING LIT or NOT ON THE MAP. Then fix
-   the file: rename keys that lit somewhere else, move zones that lit a
-   strip or a logo, and leave zones that lit nothing in `unknown`.
+3. **Check every zone on the keyboard.** Loginux works with the device that
+   `keyboard` names in `~/.config/loginux/config.toml`, so set
+   `keyboard = "my-keyboard"` there first, and restart the service if it runs.
+   Then run `loginux`, open SETTINGS, then OPEN CHANNEL CHECK, and check all
+   keys and the unknown zones. Loginux lights one zone at a time; click the
+   key that lit, or answer NOTHING LIT or NOT ON THE MAP. Then fix the file:
+   rename keys that lit somewhere else, move zones that lit a strip or a
+   logo, and leave zones that lit nothing in `unknown`.
 
 4. **Lay it out.** Set `at` and `size` so the board looks like the keyboard,
    using key units (1 = one key pitch, quarter steps are usual). Restart
@@ -129,10 +132,12 @@ Optional controls such as brightness, report rate and game mode are separate
 from the `0x8071`/`0x8081` lighting requirement. Discover each feature by ID
 on every connection and do not assume that another keyboard implements a
 G316-specific payload. Show an optional feature only when the connected
-device reports it. A setting that re-enumerates the device must be a deliberate
-action with a reconnect and readback path; it must not be replayed automatically
-like RAM-only lighting. Record getter, setter, persistence and restoration
-evidence separately in `research/` before exposing a write.
+device reports it. A setting that can re-enumerate the device must be a
+deliberate action with a reconnect and readback path. If it is sent again
+automatically, as the kept report rate is after a reconnect, it needs a limit
+so that a device which drops off after every write cannot loop (`RESTORES` in
+`src/engine.rs`). Record getter, setter, persistence and restoration evidence
+separately in `research/` before exposing a write.
 
 ## Tests
 
@@ -146,8 +151,8 @@ alone:
 - The config folder, the runtime folder and sysfs are scratch copies in a
   private folder under `$TMPDIR` (`src/testenv.rs`), removed when the tests
   end, so tests never see your profiles, your running service or your
-  devices. The tray test starts its own session bus, and `systemctl` and the
-  editor are stand-in scripts in `tests/stand-ins`.
+  devices. The tray test starts its own session bus, and `systemctl`, `busctl`
+  and the editor are stand-in scripts in `tests/stand-ins`.
 - The editor runs without a window, and tests click its controls by their
   accessibility labels.
 
@@ -159,14 +164,16 @@ request.
 
 ### Coverage
 
-CI measures line coverage on every push and updates the badge in the README.
-To measure it yourself, run `rustup component add llvm-tools` once, then
-`tools/coverage.sh`. It counts the code in `src/` and leaves out the test
-code. Lines marked with lcov's `LCOV_EXCL` markers are left out as well, and
-the report says how many. Two places carry them: `ui::run`, which opens the
-real window, and one error arm each after `poll` and `flock`, for errors that
-a valid file descriptor never returns. Add a marker only for the same kind of
-reason, and write the reason next to it.
+CI measures line coverage on every push to main and every pull request, and a
+push to main updates the badge in the README. To measure it yourself, run
+`rustup component add llvm-tools` once, then `tools/coverage.sh`. It counts
+the code in `src/` and leaves out the test code. Lines marked with lcov's
+`LCOV_EXCL` markers are left out as well, and the report says how many. They
+mark `ui::run`, which opens the real window; one error arm each after `poll`
+and `flock`, for errors that a valid file descriptor never returns; and the
+thread `notify::send` starts, since tests run the stand-in `busctl` inline.
+Add a marker only for the same kind of reason, and write the reason next to
+it.
 
 ## Evidence
 

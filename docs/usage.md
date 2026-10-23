@@ -40,16 +40,16 @@ so `~/.cargo/bin` has to be on the desktop session's `PATH`.
 
 ## The editor
 
-Run `loginux` (or `loginux ui`). The window shows the board with every key and bar
-segment in its colour. Click a key, shift-click to add more, or drag across
-the board, then set the colour with the picker, the hex field or the RGB
-values. The keyboard follows while you paint. SAVE writes the profile; USE
-THIS PROFILE makes it the one Loginux keeps applied. RELEASE LIGHTING hands the
-keyboard back to its onboard effects.
+Run `loginux` (or `loginux ui`). The window shows the board with every key
+and bar segment in its colour. Click a key, shift-click to add more, or drag
+across the board, then set the colour with the picker, the hex field or the
+RGB values. The keyboard follows while you paint. SAVE writes the profile;
+USE THIS PROFILE makes it the one Loginux keeps applied. RELEASE LIGHTING
+hands the keyboard back to its onboard effects and unsets the chosen profile.
 
 The lettering is drawn on whole device pixels, so it stays sharp at any
-display scale; `LOGINUX_UI_ZOOM=1.25 loginux` enlarges the window's contents beyond
-the display's own scale.
+display scale; `LOGINUX_UI_ZOOM=1.25 loginux` enlarges the window's contents
+beyond the display's own scale.
 
 The window never opens the keyboard itself. If no Loginux engine is running, it
 starts one inside the window, and that engine hands the lighting back when the
@@ -88,7 +88,7 @@ The profile in use when the engine starts is not announced, and a new
 notification replaces the last one. They are sent through
 `org.freedesktop.Notifications` with `busctl`, which comes with systemd. To
 turn them off, find Loginux in the desktop's notification settings (on KDE
-Plasma: System Settings, Notifications, Applications).
+Plasma: System Settings, Notifications, Configure for Applications).
 
 ## Command line
 
@@ -99,15 +99,17 @@ Plasma: System Settings, Notifications, Applications).
 | `loginux use NAME` | Chooses the profile Loginux keeps applied (`--none` to stop) |
 | `loginux apply NAME [--hold S \| --keep]` | Paints a profile for S seconds (default 10), then hands back |
 | `loginux paint esc=ff0000 bar3=00ff00 [--base RRGGBB]` | Paints single zones; takes the same `--hold`/`--keep` |
-| `loginux release` | Hands the lighting back to the keyboard now |
+| `loginux effect CLUSTER=EFFECT[,param=value]... [--hold S \| --keep]` | Runs one of the device's effects (static, breathe, cycle, wave, ripple) on a cluster, by number or light name |
+| `loginux release` | Hands the lighting back to the keyboard now; through a running engine it also unsets the chosen profile, like `use --none` |
 | `loginux rate [HZ]` | Shows the report rate, or changes it, reads it back and keeps it (the keyboard may reconnect) |
 | `loginux run [--refresh S]` | The engine: keeps the profile applied; the service runs this |
 | `loginux probe --device /dev/hidrawN` | Read-only: prints a starting definition for a new keyboard |
 
-`--device /dev/hidrawN` picks the node by hand; Loginux checks that it really is
-the HID++ interface of a known keyboard before sending anything. `apply` and `paint`
-refuse to run while an engine owns the keyboard, and they check every name and
-colour before the first write.
+`--device /dev/hidrawN` picks the node by hand; Loginux checks that it really
+is the HID++ interface of a known device before sending anything, except
+`probe`, which sends only getters and takes any USB hidraw node. `apply`,
+`paint` and `effect` refuse to run while an engine owns the keyboard, and they
+check every name and colour before the first write.
 
 ## Profiles
 
@@ -131,10 +133,11 @@ bar1 = "#5b6cff"
 Key names follow Linux `KEY_*` names (`esc`, `f1`, `grave`, `leftbrace`,
 `kp5`, `rightmeta`); `loginux zones` prints the connected keyboard's names.
 Ambiguous names such as `shift` are rejected with a suggestion. Each light
-strip gets a table named after it (`[bar]` on the G316). Zones with no known
-key (0, 47, 99–103 and 154 on the G316) stay dark unless `[zones]` names
-them. Hand edits to the chosen profile apply within a second while the engine
-runs.
+strip gets a table named after it (`[bar]` on the G316), and lights that are
+not keys share a `[lights]` table: a G903 profile sets `logo` there and has no
+`[keys]`. Zones with no known key (0, 47, 99–103 and 154 on the G316) stay
+dark unless `[zones]` names them. Hand edits to the chosen profile apply
+within a second while the engine runs.
 
 ### Effects
 
@@ -148,6 +151,9 @@ period = 3000         # milliseconds per cycle (breathe, cycle, wave)
 direction = "right"   # wave: right, left, up, down, centre-out, centre-in
 color = "#ff2e3f"     # breathe and ripple
 ```
+
+Ripple takes `period` as well, on its own scale: Solaar allows 2 to 200, and
+the preset uses 20.
 
 Four presets are built in: Breathing, Colour Cycle, Wave and Ripple. They
 show in the editor (marked BUILT IN), in the tray's Profile menu and to
@@ -167,7 +173,7 @@ changed, for example from its knob.
 | --- | --- | --- |
 | Lighting brightness (`0x8040`) | Shows the current value and the maximum. Read only. | Read on Linux |
 | Game mode (`0x4523`) | Shows on or off, and follows the keyboard's game-mode key. Read only. | Read on Linux |
-| Report rate (`0x8061`) | Shows the current rate and the rates the keyboard supports. Changes it only when you ask. | Changed on Linux to 2000, 4000 and 8000 Hz and read back |
+| Report rate (`0x8061`) | Shows the current rate and the rates the keyboard supports. Changes it when you choose a rate, and sets that rate again after a reconnect. | Changed on Linux to 2000, 4000 and 8000 Hz and read back |
 | Volume knob | Nothing: the knob sends ordinary media keys, which Linux handles. | Seen on Windows |
 
 A report-rate change can make the keyboard leave the USB bus and come back: the
@@ -179,16 +185,17 @@ rate, the editor and the command line say so. On a keyboard with profile
 management (`0x8101`), Loginux switches it to host mode for the write and back
 to onboard mode right after, the switch Solaar makes when it claims and
 releases a device; G HUB makes the same host switch before its rate writes. The
-keyboard forgets the rate when it reconnects and comes back at its own (1000 Hz
-on the G316 X 98). So, like G HUB, Loginux keeps the rate you chose and sends
-it again when the keyboard connects at another rate, never a rate the keyboard
-refused. If the keyboard drops off within a minute of three such sends in ten
-minutes, Loginux stops sending until you choose a rate, so a keyboard that
-leaves after every write cannot loop; ordinary replugs do not count. Choosing
-the keyboard's own rate stops the writes. A rate the keyboard still refuses is
-marked and not offered again (kept in `~/.config/loginux/rates/`; delete that
-file to try it once more). Brightness and game-mode changes are not offered:
-their commands on the G316 are not verified.
+keyboard can come back at its own rate after a reconnect (1000 Hz on the
+G316 X 98), though it has kept 8000 Hz through most reconnects so far. So,
+like G HUB, Loginux keeps the rate you chose and sends it again when the
+keyboard connects at another rate, never a rate the keyboard refused. If the
+keyboard drops off within a minute of three such sends in ten minutes, Loginux
+stops sending until you choose a rate, so a keyboard that leaves after every
+write cannot loop; ordinary replugs do not count. Choosing the keyboard's own
+rate stops the writes. A rate the keyboard still refuses is marked and not
+offered again (kept in `~/.config/loginux/rates/`; delete that file to try it
+once more). Brightness and game-mode changes are not offered: their commands
+on the G316 are not verified.
 [G316 extra controls](../research/g316-extra-controls.md) has the evidence.
 
 ## Run at login
@@ -216,24 +223,27 @@ The service drives one device: the one `keyboard` names in
 to a device. It waits for that device while it is unplugged and never takes
 another in its place. To drive another device, set `keyboard` to its
 definition, such as `g903-hero`, and restart the service. A device the service
-does not drive keeps its onboard lighting; `loginux effect ... --device
-/dev/hidrawN` lights it for a while by hand.
+does not drive keeps its onboard lighting. `loginux effect ... --device
+/dev/hidrawN` can light it for a while by hand, but only with the service
+stopped: one lock covers every device.
 
 - Stop now, handing the lighting back: `systemctl --user stop loginux`
-- Stop at login: `systemctl --user disable --now loginux`
+- Stop now and at every login: `systemctl --user disable --now loginux`
 - Logs: `journalctl --user -u loginux`
 
 ## Getting the onboard lighting back
 
 `loginux release`, RELEASE LIGHTING in the editor, or stopping the service all
-hand the lighting back. If Loginux was killed without a chance to do that, the
-next `loginux release` restores the saved values from
-`$XDG_RUNTIME_DIR/loginux/claim`. Unplugging and replugging the keyboard always
-resets it.
+hand the lighting back. The first two also unset the chosen profile; a stopped
+service applies it again when it starts. If Loginux was killed without a
+chance to hand the lighting back, the next `loginux release` restores the
+saved values from `$XDG_RUNTIME_DIR/loginux/claim-ID`, one file per device
+definition (such as `claim-g316-x-98`). Unplugging and replugging the keyboard
+always resets it.
 
 When another program holds the keyboard's lighting, Loginux does not overwrite
-it: the editor shows the conflict and offers TAKE OVER, and the command line
-stops with a message.
+it: the editor shows the conflict and offers TAKE OVER, the tray menu offers
+Take Over Lighting, and the command line stops with a message.
 
 ## How it talks to the device
 
@@ -248,32 +258,38 @@ keyboard (IRoot) on every connect. Loginux sends only these requests:
 - `0x8081` per-key lighting: getInfo, setIndividualRgbZones, frameEnd
 - `0x4540` keyboard layout, `0x8040` brightness, `0x4523` game mode: read
 - `0x8061` report rate: read the supported rates and the current one; set the
-  rate only when you choose one
+  rate you choose, and set it again when the keyboard reconnects at another
+  rate
 - `0x8101` profile management: function 6 only, host mode (`05`) before a rate
   change and back (`03`) right after; never the profile memory
 - `loginux probe` adds getters only: `0x0001` feature set, `0x8070` colour LED
   effects, `0x8100` onboard profiles, and the get form of `0x8071` function 3
 
-A paint takes control, sets the Static effect on each lighting cluster, sends
-the frame and commits it. An effect is sent once. When it covers every cluster
-and the device lists it among the effects it can play on all clusters at once,
-it goes to cluster `0xFF`, so keys and light bar run on one clock; otherwise
-each cluster gets its own. After that a change stages only the zones that
-changed, at most about 60 frames a second while you drag a colour, and the
-claim is checked every two seconds; if the keyboard reset itself, Loginux paints
-again. A single engine owns the keyboard at a time (a lock in
-`$XDG_RUNTIME_DIR/loginux`), and the editor and the command line talk to it over a
-socket there.
+A paint takes control, sets the Static effect on each lighting cluster, then
+sends and commits the frame twice, since the first frame after a claim can be
+dropped; a device without `0x8081` gets each cluster's Static colour instead.
+An effect is sent once. When it covers every cluster and the device lists it
+among the effects it can play on all clusters at once, it goes to cluster
+`0xFF`, so keys and light bar run on one clock; otherwise each cluster gets
+its own. After that a change stages only the zones that changed, at most about
+60 frames a second while you drag a colour, and the claim is checked every two
+seconds; if the keyboard reset itself, Loginux paints again. A single engine
+owns the keyboard at a time (a lock in `$XDG_RUNTIME_DIR/loginux`), and the
+editor and the command line talk to it over a socket there.
 
 ## Files
 
 - `~/.config/loginux/profiles/*.toml`: profiles
-- `~/.config/loginux/config.toml`: the chosen profile and the keyboard last seen
-- `~/.config/loginux/checks/KEYBOARD.toml`: channel-check answers per keyboard model
-- `~/.config/loginux/rates/KEYBOARD.toml`: the report rate you chose for this keyboard (`keep`) and the rates it refused; delete it to forget both
+- `~/.config/loginux/config.toml`: the chosen profile and the keyboard last
+  seen
+- `~/.config/loginux/checks/KEYBOARD.toml`: channel-check answers per keyboard
+  model
+- `~/.config/loginux/rates/KEYBOARD.toml`: the report rate you chose for this
+  keyboard (`keep`) and the rates it refused; delete it to forget both
 - `~/.config/loginux/devices/*.toml`: your own device definitions; one with
   a built-in's ID replaces it
-- `$XDG_RUNTIME_DIR/loginux/`: lock, socket and claim record (cleared at logout)
+- `$XDG_RUNTIME_DIR/loginux/`: lock, socket and a claim record per device
+  (cleared at logout)
 
 ## What has been tested
 

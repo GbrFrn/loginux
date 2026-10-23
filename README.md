@@ -89,7 +89,7 @@ Open **Loginux** from the application menu, or run `loginux`.
 
 ```sh
 loginux use Wave     # keep a profile applied
-loginux release      # hand the lighting back to the device
+loginux release      # hand the lighting back and stop keeping a profile
 loginux status       # device, profile and settings
 ```
 

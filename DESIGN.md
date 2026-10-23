@@ -1,6 +1,6 @@
 ---
 name: Loginux
-description: Per-key RGB for Logitech HID++ keyboards on Linux, set as a bitmap type specimen on black.
+description: RGB lighting for Logitech HID++ keyboards and mice on Linux, set as a bitmap type specimen on black.
 colors:
   ground: "#0B0B0C"
   panel: "#151517"
@@ -172,11 +172,11 @@ Rejected outright: the RGB-suite default of a charcoal window with a product ren
 Near-black greys for structure, LED colour for content, and three signals that never trade roles.
 
 ### Primary
-- **Signal Red** (signal-red): selection, the active tab underline, the primary action, keyboard focus rings, the text cursor and text-selection tint (at 45 percent). On a primary button the label is Ground-coloured.
-- **Signal Red, Hot** (signal-red-hot): hover on the primary button only.
+- **Signal Red** (signal-red): selection (key outlines and the drag marquee), the active tab underline, the primary action, the RUN AT LOGIN switch's track when on, keyboard focus rings, the text cursor and text-selection tint (at 45 percent). On a primary button the label is Ground-coloured.
+- **Signal Red, Hot** (signal-red-hot): hover on the primary button and on the RUN AT LOGIN switch's track when on.
 
 ### Secondary
-- **Observed Green** (observed-green): the connected status square and the proof mark for a zone whose observed position matched; "as expected" answers and a completed check count.
+- **Observed Green** (observed-green): the connected status square and the proof mark for a zone whose observed position matched; "as expected" answers, a completed check count, and a report rate read back after a change.
 
 ### Tertiary
 - **Caution Amber** (caution-amber): warnings, notices, errors (egui's warn and error colours are both amber), input hints that reject a value, and the proof mark for a zone that lit somewhere other than expected.
@@ -188,7 +188,7 @@ Near-black greys for structure, LED colour for content, and three signals that n
 - **Rule** (rule): 2pt rules, quiet-button and box edges, the board frame, the scroll-bar track, the pressed fill of outline buttons.
 - **Text** (text): primary text, the 2pt header baseline rule, the outline button's edge, the open profile's edge, hover outline on keys.
 - **Secondary Text** (text-secondary): supporting text, quiet-button labels, legends on unpainted keys.
-- **Label Grey** (label): group labels such as PROFILES, SELECT and HEX, inactive tabs, meta lines, empty readouts.
+- **Label Grey** (label): group labels such as PROFILES, SELECT and HEX, inactive tabs, the meta line while nothing is unsaved (it turns Text with UNSAVED), notes under the settings, empty readouts.
 - **Disabled** (disabled): text of a disabled control.
 - **Dot Grey** (dots): the dot-matrix patch.
 - **Board Black** (board-body): the keyboard body and text-field backgrounds.
@@ -211,8 +211,8 @@ Near-black greys for structure, LED colour for content, and three signals that n
 ### Hierarchy
 - **Title** (Silkscreen Bold, 6pt cell, 30pt cap): the open profile's name, and the SETTINGS and CHANNEL CHECK headings, in the centre column.
 - **Brand** (Silkscreen Bold, 4pt cell, 20pt cap): the LOGINUX wordmark at the header's left.
-- **Hex** (Silkscreen Bold, 4pt cell, 20pt cap): the selection's hex value, or NONE or MIXED, and the zone number during a check.
-- **Tab** (Silkscreen Regular, 2pt cell, 10pt cap): EDIT and SETTINGS in the header. The channel check opens from SETTINGS, which stays underlined while it runs.
+- **Hex** (Silkscreen Bold, 4pt cell, 20pt cap): the selection's hex value, or NONE or MIXED, the effect's name in an effect profile, and the zone number during a check.
+- **Tab** (Silkscreen Regular, 2pt cell, 10pt cap): EDIT and SETTINGS in the header, and the setting values on the SETTINGS page. The channel check opens from SETTINGS, which stays underlined while the check is open.
 - **Label** (Silkscreen Bold, 1.5pt cell, 7.5pt cap): button labels and control-group labels.
 - **Small** (Silkscreen Regular, 1.5pt cell, 7.5pt cap): profile names, status words, meta and proof lines, research-zone numbers.
 - **Legend** (Silkscreen Regular, 1pt cell, 5pt cap): key legends, inset 4pt from the key's top-left.
@@ -232,10 +232,10 @@ A fixed three-column instrument under a header. The window opens at 1360 x 840pt
 
 - **Header:** 64pt tall on Ground, closed by a 2pt Text-coloured rule. Wordmark 22pt from the left; tabs 36pt after it, 34pt apart, hit areas padded 8pt; the RUN AT LOGIN switch 22pt from the right; the dot patch (192 x 30pt) sits 22pt left of it and drops out when the tabs need the room.
 - **Left column:** 236pt wide with 16pt margins on Ground: profiles in 48pt ruled boxes, then a rule and the connection status block pinned to the bottom.
-- **Centre column:** Ground with 24pt margins, scrolling vertically: title, meta line (in the channel check, the proof key), then the board at the column's width (at most 1200pt, key unit at most 60pt), then selection and research controls.
-- **Right column:** 316pt wide with 16pt margins on Panel: the specimen of the selection (label, hex, swatch at three sizes), picker, value rows, colour list, then save and use actions.
+- **Centre column:** Ground with 24pt margins, scrolling vertically. EDIT: title, meta line, the LIGHTING row, then the board at the column's width (at most 1200pt, key unit at most 60pt), then selection and research controls and the hover line. SETTINGS: title, the DEVICE group with one row per setting, a rule, then the CHANNEL CHECK group. CHANNEL CHECK: title with BACK TO SETTINGS at the right; before a run, the method, one CHECK button per run with its answered count, the proof key and the board; during a run, the zone number, the board and the answers.
+- **Right column:** 316pt wide with 16pt margins on Panel. EDIT: the specimen of the selection (label, hex, swatch at three sizes), picker, value rows, colour list, then save and use actions; for an effect profile, the effect's settings take the place of the specimen, picker and colour list. SETTINGS: ABOUT THESE SETTINGS, notes on how Loginux reads and writes them. CHANNEL CHECK: the answers of the chosen run, with CLEAR THESE ANSWERS at the foot.
 - **Column rules:** 2pt Rule-coloured verticals at both column edges, drawn on top of the panels.
-- **Rhythm:** item spacing 8pt by default (7pt in the status block); added gaps step through 2, 4, 6, 10, 12, 14 and 18pt; the board group gets 18pt before and 14pt after.
+- **Rhythm:** item spacing 8pt by default (7pt in the status block); added gaps step through 2, 4, 6, 8, 10, 12, 14 and 18pt; in EDIT the LIGHTING row gets 18pt before and 12pt after, and the board 14pt after.
 
 ### Named Rules
 **The Snapped Geometry Rule.** Every rectangle passes through `snap()` and every line width through `line()`: edges and widths land on whole device pixels, lines at least one pixel wide. Feathering is off globally, so a non-snapped shape shows as a visible jag. Keep it that way.
@@ -249,16 +249,17 @@ Flat. There are no shadows, glows or gradients anywhere. Depth comes from tonal 
 
 ## Shapes
 
-Square everywhere: corner radius 0 on windows, menus, widgets, buttons, boxes, fields and keys. Edges are 2pt rules (1pt for hairline marks: the hover outline on keys, swatch edges in the colour list, the drag marquee). Small square marks carry state: an 8pt square for connection status and IN USE, a 3pt square in a key's lower-right corner (below the segment on strips) for proof. The dot-matrix patch is 2pt dots on a 6pt pitch, both snapped.
+Square everywhere: corner radius 0 on windows, menus, widgets, buttons, boxes, fields and keys. Edges are 2pt rules (1pt for hairline marks: the hover outline on keys, swatch edges in the colour list, the drag marquee). Small square marks carry state: an 8pt square for connection status, IN USE and the current choice in a row of options, a 3pt square in a key's lower-right corner (below the segment on strips) for proof. The dot-matrix patch is 2pt dots on a 6pt pitch, both snapped.
 
 ## Components
 
 ### Buttons
 Bitmap caps in a snapped rectangle, sized to the label plus 24 x 18pt.
 - **Shape:** square (0), 2pt edge drawn inside.
-- **Primary:** Signal Red fill, Ground label, no edge; hover Signal Red Hot. One per context: SAVE, TAKE OVER, a confirm's yes.
-- **Outline:** transparent with a Text edge and Text label; hover Raised, pressed Rule. For committing actions such as RELEASE LIGHTING, USE THIS PROFILE, CREATE, CHECK.
-- **Quiet:** transparent with a Rule edge and Secondary Text label; hover Raised with Text label. For secondary and reversible actions: REVERT, DELETE, SKIP, selection presets.
+- **Primary:** Signal Red fill, Ground label, no edge; hover Signal Red Hot. One per context: SAVE (SAVE AS NEW on a built-in preset), TAKE OVER, a confirm's yes such as CHANGE RATE.
+- **Outline:** transparent with a Text edge and Text label; hover Raised, pressed Rule. For committing actions such as RELEASE LIGHTING, USE THIS PROFILE, CREATE, OPEN CHANNEL CHECK, a run's CHECK button, NOTHING LIT and NOT ON THE MAP.
+- **Quiet:** transparent with a Rule edge and Secondary Text label; hover Raised with Text label. For secondary and reversible actions (REVERT, DELETE, SKIP, selection presets) and for the options in the LIGHTING, DIRECTION and SET RATE rows.
+- **Current choice:** in a row of options the chosen one is not a button but an 8pt Secondary Text square beside its label in Label caps, Secondary Text; IN USE among the actions uses the same mark.
 - **Focus:** a 2pt Signal Red outline 3pt outside the button.
 - **Disabled:** Disabled text, no edge, no fill, no click sense.
 
@@ -274,7 +275,7 @@ The login service's one setting, at the header's right: the label RUN AT LOGIN i
 Tab-size bitmap caps in the header. Inactive tabs are Label Grey and turn Text on hover; the active tab is Text with a 4pt Signal Red underline resting on the header rule and overhanging the word by 2pt each side. Focus is a 2pt red outline.
 
 ### Profile Boxes
-Full-width 48pt boxes with a 2pt Rule edge and 10pt inset. The name sits in Small caps at the top left, an optional mark (IN USE) at the bottom right, and a 5pt colour strip along the bottom shows every zone colour in proportion. The open profile gets a Panel fill and a Text edge; hover is Raised.
+Full-width 48pt boxes with a 2pt Rule edge and 10pt inset. The name sits in Small caps at the top left, an optional mark at the bottom right (IN USE, or BUILT IN for a preset), and a 5pt colour strip along the bottom shows every zone colour in proportion; an effect profile shows its colour, or a 24-step hue strip when it has none. The open profile gets a Panel fill and a Text edge; hover is Raised.
 
 ### Inputs / Fields
 - **Style:** egui text fields and drag values on Board Black with a 2pt Rule edge, square, 26pt tall, Archivo text.
@@ -287,7 +288,7 @@ Full-width 48pt boxes with a 2pt Rule edge and 10pt inset. The name sits in Smal
 The selection shown as a type specimen: a Label line naming the selection (up to five names, else a zone count), the hex in Hex caps, then the colour as three flat swatches of full width x 72pt, half width x 34pt and one-fifth width x 14pt, split evenly when several colours are selected. With nothing selected, a 72pt dot-matrix patch and one line of instruction take the swatch's place.
 
 ### Keyboard Board (signature)
-The board on a black body with 10pt padding, framed by a 2pt Rule outline set 8pt outside. Keys are inset by a snapped gap of a tenth of a unit (at least 2pt); strip segments touch, separated by a single pixel. Unpainted zones are Dark Key with Secondary Text legends; painted zones show the exact RGB, with a black or white legend picked by luminance. Selection is a 2pt Signal Red outline just outside the key; hover is a 1pt Text outline; the drag marquee is a 1pt red rectangle. In the channel check, proof marks are 3pt squares, green for observed and amber for differs, explained by the proof key above the board (unmarked means layout data only). The editing board shows colour only.
+The board on a black body with 10pt padding, framed by a 2pt Rule outline set 8pt outside. Keys are inset by a snapped gap of a tenth of a unit (at least 2pt); strip segments touch, separated by a 1pt gap. Unpainted zones are Dark Key with Secondary Text legends; painted zones show the exact RGB, with a Ground or Text legend picked by luminance. Selection is a 2pt Signal Red outline just outside the key; hover is a 1pt Text outline; the drag marquee is a 1pt red rectangle. In the channel check and on an effect profile's board, every zone is Dark Key and nothing can be selected. In the channel check, proof marks are 3pt squares, green for observed and amber for differs, explained by the proof key above the board before a run starts (unmarked means layout data only). The editing board shows colour only.
 
 ### Status Block
 An 8pt square (Observed Green when connected, Caution Amber for no engine, no access or errors, Label Grey otherwise) beside a Small-caps status word, then Archivo detail lines and the lighting action at the column's foot.
@@ -301,7 +302,7 @@ A keycap with penguin eyes and beak, lit along its bottom edge: a 16 x 16 pixel 
 - **Do** draw every bitmap word with `px_text` at one of the seven sizes (cells of 1, 1.5, 2, 4 or 6pt) and snap every shape with `snap()`, `line()`, `fill()` and `outline()`.
 - **Do** keep feathering off and keep the +0.01 rounding bias in `whole()`.
 - **Do** show LED colour as a flat fill of the exact RGB the keyboard receives.
-- **Do** reserve Signal Red for selection, the active tab, focus and the one primary action in view; Observed Green for connected and observed; Caution Amber for warnings and differing proof.
+- **Do** reserve Signal Red for selection, the active tab, focus, the login switch when on and each context's primary action; Observed Green for connected and observed; Caution Amber for warnings and differing proof.
 - **Do** render disabled controls as Disabled-grey text with no edge.
 - **Do** keep proof states distinct: observed, differs, and unmarked layout data.
 - **Do** fall back from full label to `short` legend to no legend on keys.

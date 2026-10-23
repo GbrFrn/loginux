@@ -25,7 +25,8 @@ names another device, the live observations come from a G316 X 98
   driver uses 1, so a user program should pick 2 to 15 and match all three.
   (static)
 - Errors come back as `11 <device> ff <feature index> <function|swid> <code>`.
-  Code 8 (busy) means "try again"; Loginux retries for up to a second. (live)
+  Code 8 (busy) means "try again"; Loginux retries its lighting writes for
+  up to a second. (live)
 
 ## Finding features
 
@@ -54,7 +55,8 @@ static below come from it.
     lighting cluster. Byte 6 says whether effects can be saved to EEPROM, and
     byte 7 whether function 2 may set which of the cluster's LEDs are on.
     (static)
-  - `[cluster i 00]`: bytes 2 and 3 are effect `i`'s ID; `0x0001` is Static. (live)
+  - `[cluster i 00]`: bytes 2 and 3 are effect `i`'s ID; `0x0001` is
+    Static. (live)
   - Byte 7 of the `[ff ff 00]` reply is the number of multi-cluster effects,
     which play on all clusters at once (static), and `[ff i 00]` reads them
     like a cluster's effects (live on the G316).
@@ -68,7 +70,8 @@ static below come from it.
     show. (static)
   - Releasing bit 0 makes the firmware reload its onboard effects: the
     lighting came back on the G316, and the G903 reads back `00 00`. (live)
-- Function 1 `setEffect`: `[cluster, effect index, 10 parameter bytes, persistence]`.
+- Function 1 `setEffect`:
+  `[cluster, effect index, 10 parameter bytes, persistence]`.
   - For Static the parameters are `R G B` followed by seven zeros.
   - It fails with error 5 unless control bit 0 is set. (live)
   - Cluster `0xFF` applies a multi-cluster effect to all clusters, by its
@@ -130,7 +133,9 @@ on the G903; the cause is inference, see [g903.md](g903.md))
 5. From then on, stage only the zones that changed, then commit. The
    keyboard keeps every zone a frame leaves out: Solaar's single-key write
    relies on it (static), and G HUB changed Esc alone with one range
-   (live, Windows). Loginux sends the whole frame again only on a refresh.
+   (live, Windows). Loginux sends the whole frame again on a refresh, and
+   repeats steps 3 and 4 when the keys' base colour changes or colours
+   follow an effect.
 6. To stop, write back the remembered mode with bit 0 cleared. The firmware
    reloads its onboard effects, and unplugging the device resets everything
    anyway.
@@ -149,6 +154,8 @@ experimenting (from the G316 sessions; the IDs are standard HID++ features):
 - `0x18b0`: monitor mode, which floods reports
 - `0x1e02` and `0x1602`: managing deactivatable features and password
   authentication; engineering features sit behind them
+- `0x1e00`: enable hidden features, which by its name unlocks the hidden and
+  engineering ones (inference)
 
 These write non-volatile memory, which Loginux never does:
 
