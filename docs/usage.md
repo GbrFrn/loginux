@@ -222,7 +222,13 @@ keyboard (IRoot) on every connect. Loginux sends only these requests:
   one cluster or for all of them (`0xFF`), get and set software control (mode
   bit 0 only; the firmware keeps power management)
 - `0x8081` per-key lighting: getInfo, setIndividualRgbZones, frameEnd
-- `0x4540` keyboard layout: read
+- `0x4540` keyboard layout, `0x8040` brightness, `0x4523` game mode: read
+- `0x8061` report rate: read the supported rates and the current one; set the
+  rate only when you choose one
+- `0x8101` profile management: function 6 only, host mode (`05`) before a rate
+  change and back (`03`) right after; never the profile memory
+- `loginux probe` adds getters only: `0x0001` feature set, `0x8070` colour LED
+  effects, `0x8100` onboard profiles, and the get form of `0x8071` function 3
 
 A paint takes control, sets the Static effect on each lighting cluster, sends
 the frame and commits it. An effect is sent once. When it covers every cluster
