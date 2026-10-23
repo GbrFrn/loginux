@@ -156,7 +156,8 @@ the keyboard, reads the rate back, and repaints the chosen profile. If the
 keyboard does not return or reports another rate, the editor and the command
 line say so. On the G316 X 98 (firmware U186.01.B0007) every rate change was
 refused over Linux, including rates the keyboard lists; a refused rate is
-marked and not offered again. Changing the rate here would need the step G HUB
+marked and not offered again (kept in `~/.config/loginux/rates/`; delete that
+file to try it once more). Changing the rate here would need the step G HUB
 performs on Windows, which a USB capture there would show. Brightness and
 game-mode changes are not offered: their commands on the G316 are not
 verified. [G316 extra controls](../research/g316-extra-controls.md)
@@ -234,6 +235,7 @@ socket there.
 - `~/.config/loginux/profiles/*.toml`: profiles
 - `~/.config/loginux/config.toml`: the chosen profile and the keyboard last seen
 - `~/.config/loginux/checks/KEYBOARD.toml`: channel-check answers per keyboard model
+- `~/.config/loginux/rates/KEYBOARD.toml`: report rates this keyboard refused (delete to offer them again)
 - `~/.config/loginux/devices/*.toml`: your own device definitions; one with
   a built-in's ID replaces it
 - `$XDG_RUNTIME_DIR/loginux/`: lock, socket and claim record (cleared at logout)

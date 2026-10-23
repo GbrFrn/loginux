@@ -300,8 +300,9 @@ struct Link {
     controls: Controls,
     rates: Option<Rates>,
     next_controls: Instant,
-    /// Rate indices the keyboard refused this connection.
-    refused: Vec<u8>,
+    /// Report rates (Hz) the keyboard refused: loaded per device on connect,
+    /// added to on a fresh refusal, saved so a reconnect does not re-offer them.
+    refused: Vec<u32>,
 }
 
 /// A report-rate write the user asked for, waiting for a readback.
@@ -338,10 +339,6 @@ pub fn read_controls(kb: &mut Keyboard) -> Result<(Controls, Option<Rates>), Err
     Ok((controls, rates))
 }
 
-/// Rate indices as Hz, for the refused list.
-fn refused_hz(indices: &[u8]) -> Vec<u32> {
-    indices.iter().filter_map(|&i| RATES_HZ.get(usize::from(i)).copied()).collect()
-}
 
 struct Engine {
     opts: Options,
@@ -528,11 +525,10 @@ impl Engine {
                     Error::Device(_, code) => format!("the keyboard refused {hz} Hz (HID++ error {code:#04x}){stays}"),
                     e => e.to_string(),
                 };
-                if refusal {
-                    if !link.refused.contains(&index) {
-                        link.refused.push(index);
-                    }
-                    link.controls.report_rate_refused = refused_hz(&link.refused);
+                if refusal && !link.refused.contains(&hz) {
+                    link.refused.push(hz);
+                    let _ = profile::save_refused_rates(link.kb.model, &link.refused);
+                    link.controls.report_rate_refused = link.refused.clone();
                 }
                 log(&format!("report-rate change refused: {error}"));
                 self.rate_change = Some(RateChange::Failed { hz, error: error.clone() });
@@ -669,10 +665,12 @@ impl Engine {
         let zones = zones(&mut kb, &statics)?;
         let effects = kb.effect_ids()?;
         let multi = optional(kb.multi_cluster_ids().map(Some))?.unwrap_or_default();
-        let (controls, rates) = read_controls(&mut kb)?;
+        let (mut controls, rates) = read_controls(&mut kb)?;
         let now = Instant::now();
         let path = kb.path.display().to_string();
         let model = kb.model;
+        let refused = profile::load_refused_rates(model);
+        controls.report_rate_refused = refused.clone();
         log(&format!("{} connected on {path}: HID++ {}.{}, {} zones", model.name, protocol.0, protocol.1, zones.len()));
         let missing = model.zones.iter().filter(|z| !zones.contains(&z.id)).count();
         if missing > 0 {
@@ -710,7 +708,7 @@ impl Engine {
             controls,
             rates,
             next_controls: now + CONTROLS_EVERY,
-            refused: vec![],
+            refused,
         });
         if self.rate_pending.is_some() {
             self.rate_readback(current);
@@ -766,7 +764,7 @@ impl Engine {
                 let (controls, rates) = read_controls(&mut link.kb)?;
                 let current = rates.as_ref().map(|r| r.1);
                 (link.controls, link.rates) = (controls, rates);
-                link.controls.report_rate_refused = refused_hz(&link.refused);
+                link.controls.report_rate_refused = link.refused.clone();
                 if readback_due {
                     self.rate_readback(current); // the keyboard kept its connection through the change
                 }
@@ -1195,6 +1193,7 @@ mod tests {
     #[test]
     fn report_rate_changes_refusals_and_readback() {
         let _serial = crate::testenv::serial();
+        let _ = fs::remove_file(profile::refused_rates_path(layout::find("g316-x-98").unwrap()));
         let (mut e, fake) = linked();
         fake.state().refuse_rate = Some((6, 2));
         let Reply::Err(refused) = e.handle(Request::SetReportRate { hz: 8000 }) else { panic!("8000 Hz was accepted") };
@@ -1219,6 +1218,25 @@ mod tests {
         e.rate_readback(Some(4));
         assert!(matches!(e.status().rate_change, Some(RateChange::Done { hz: 2000 })));
         assert_eq!(e.status().controls.unwrap().report_rates, [1000, 2000, 4000, 8000]);
+        assert_eq!(profile::load_refused_rates(layout::find("g316-x-98").unwrap()), [8000], "the refusal was saved for the device");
+        let _ = fs::remove_file(profile::refused_rates_path(layout::find("g316-x-98").unwrap()));
+    }
+
+    #[test]
+    fn refused_rates_come_back_on_the_next_connection() {
+        let _serial = crate::testenv::serial();
+        let g316 = layout::find("g316-x-98").unwrap();
+        let _ = fs::remove_file(profile::refused_rates_path(g316));
+        // One connection refuses 8000 Hz, which is saved for the device.
+        let (mut e, fake) = linked();
+        fake.state().refuse_rate = Some((6, 2));
+        assert!(matches!(e.handle(Request::SetReportRate { hz: 8000 }), Reply::Err(_)));
+        drop((e, fake));
+        // The next connection offers it as refused without trying it again.
+        let (e, fake) = linked();
+        assert_eq!(e.status().controls.unwrap().report_rate_refused, [8000], "loaded on connect");
+        assert_eq!(fake.requests(0x8061).iter().filter(|r| r.0 == 3).count(), 0, "nothing was sent to learn it");
+        let _ = fs::remove_file(profile::refused_rates_path(g316));
     }
 
     #[test]

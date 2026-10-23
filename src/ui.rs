@@ -2874,6 +2874,7 @@ mod tests {
         forget_claims();
         profile::set_active(None).unwrap();
         let _ = std::fs::remove_file(profile::checks_path(g316()));
+        let _ = std::fs::remove_file(profile::refused_rates_path(g316()));
         scratch_profile("T live", [255, 0, 0]);
         let kb = crate::fake::plug("/dev/fake-ui", "g316-x-98", crate::fake::g316());
         let mut w = Window::hosting(Some("/dev/fake-ui"));
@@ -2968,6 +2969,7 @@ mod tests {
         ok_use_none(&mut w);
         profile::delete("T live").unwrap();
         let _ = std::fs::remove_file(profile::checks_path(g316()));
+        let _ = std::fs::remove_file(profile::refused_rates_path(g316()));
         forget_claims();
     }
 

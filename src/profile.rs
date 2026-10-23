@@ -331,6 +331,33 @@ pub fn today() -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
+/// Rates a device refused (HID++ error on the write), kept per model so the
+/// editor does not offer them again after a reconnect or a login.
+pub fn refused_rates_path(model: &Model) -> PathBuf {
+    config_dir().join("rates").join(format!("{}.toml", model.id))
+}
+
+pub fn load_refused_rates(model: &Model) -> Vec<u32> {
+    let doc: toml::Table = fs::read_to_string(refused_rates_path(model)).ok().and_then(|t| t.parse().ok()).unwrap_or_default();
+    doc.get("refused")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_integer().map(|n| n as u32)).collect())
+        .unwrap_or_default()
+}
+
+pub fn save_refused_rates(model: &Model, rates: &[u32]) -> Result<(), String> {
+    let list = rates.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
+    let text = format!(
+        "# Report rates the {} listed but refused over Linux (HID++ error on the write).
+         # Delete this file to offer them again.
+
+refused = [{list}]
+",
+        model.name
+    );
+    write_atomic(&refused_rates_path(model), &text)
+}
+
 fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     let dir = path.parent().ok_or("no parent directory")?;
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -403,6 +430,19 @@ mod tests {
         assert!(set_active(Some("../escape")).is_err());
         set_keyboard("bad id!").unwrap(); // an invalid id is dropped, not written
         assert_eq!(chosen_keyboard(), None);
+    }
+
+    #[test]
+    fn refused_rates_round_trip_per_model() {
+        let _serial = crate::testenv::serial();
+        let m = g316();
+        let _ = fs::remove_file(refused_rates_path(m));
+        assert!(load_refused_rates(m).is_empty(), "none by default");
+        save_refused_rates(m, &[2000, 8000]).unwrap();
+        assert_eq!(load_refused_rates(m), [2000, 8000]);
+        save_refused_rates(m, &[]).unwrap();
+        assert!(load_refused_rates(m).is_empty());
+        fs::remove_file(refused_rates_path(m)).unwrap();
     }
 
     #[test]
