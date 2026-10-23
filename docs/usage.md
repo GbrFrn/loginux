@@ -179,6 +179,14 @@ systemctl --user enable --now loginux.service     # what RUN AT LOGIN does
 Enabling makes `loginux run` start at every login. The copied unit expects the
 binary at `~/.cargo/bin/loginux`; edit `ExecStart` if it lives elsewhere.
 
+The service drives one device: the one `keyboard` names in
+`~/.config/loginux/config.toml`, which Loginux writes when it first connects
+to a device. It waits for that device while it is unplugged and never takes
+another in its place. To drive another device, set `keyboard` to its
+definition, such as `g903-hero`, and restart the service. A device the service
+does not drive keeps its onboard lighting; `loginux effect ... --device
+/dev/hidrawN` lights it for a while by hand.
+
 - Stop now, handing the lighting back: `systemctl --user stop loginux`
 - Stop at login: `systemctl --user disable --now loginux`
 - Logs: `journalctl --user -u loginux`
@@ -202,14 +210,17 @@ check is repeated on the opened file. HID++ feature indices come from the
 keyboard (IRoot) on every connect. Loginux sends only these requests:
 
 - `0x0000` IRoot: getFeature, getProtocolVersion
-- `0x8071` RGB effects: getInfo, setEffect with persistence `0x01` (RAM), get
-  and set software control (mode bit 0 only; the firmware keeps power
-  management)
+- `0x8071` RGB effects: getInfo, setEffect with persistence `0x01` (RAM) for
+  one cluster or for all of them (`0xFF`), get and set software control (mode
+  bit 0 only; the firmware keeps power management)
 - `0x8081` per-key lighting: getInfo, setIndividualRgbZones, frameEnd
 - `0x4540` keyboard layout: read
 
 A paint takes control, sets the Static effect on each lighting cluster, sends
-the frame and commits it. After that only changed frames are sent, and the
+the frame and commits it. An effect is sent once. When it covers every cluster
+and the device lists it among the effects it can play on all clusters at once,
+it goes to cluster `0xFF`, so keys and light bar run on one clock; otherwise
+each cluster gets its own. After that only changed frames are sent, and the
 claim is checked every two seconds; if the keyboard reset itself, Loginux paints
 again. A single engine owns the keyboard at a time (a lock in
 `$XDG_RUNTIME_DIR/loginux`), and the editor and the command line talk to it over a

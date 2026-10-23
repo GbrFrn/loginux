@@ -213,9 +213,16 @@ fn targets(model: &Model, clusters: usize) -> impl Iterator<Item = usize> + '_ {
     (0..clusters).filter(move |&c| model.per_key || model.zone(c as u8).is_some())
 }
 
-/// Starts `effect` on its clusters, in RAM. A cluster without that kind of
-/// effect shows the effect's colour as Static instead.
-pub fn play(kb: &mut Keyboard, lists: &[Vec<u16>], statics: &[(u8, u8)], effect: &Effect) -> Result<(), Error> {
+/// Starts `effect` on its clusters, in RAM: as one effect on all of them when
+/// it covers every cluster and the device lists it in `multi` (one clock keeps
+/// keys and light bar in step), else cluster by cluster. A cluster without
+/// that kind of effect shows the effect's colour as Static instead.
+pub fn play(kb: &mut Keyboard, lists: &[Vec<u16>], multi: &[u16], statics: &[(u8, u8)], effect: &Effect) -> Result<(), Error> {
+    let every = targets(kb.model, lists.len()).count() == lists.len();
+    if every && let Ok((id, params)) = effect.encode(multi) {
+        let index = multi.iter().position(|&i| i == id).expect("encode picks a listed ID") as u8;
+        return kb.set_effect(0xFF, index, params);
+    }
     for c in targets(kb.model, lists.len()).collect::<Vec<_>>() {
         let ids = &lists[c];
         match effect.encode(ids) {
@@ -284,6 +291,8 @@ struct Link {
     statics: Vec<(u8, u8)>,
     /// Effect IDs each cluster lists.
     effects: Vec<Vec<u16>>,
+    /// Effect IDs the device can play on all clusters at once.
+    multi: Vec<u16>,
     held: Option<Held>,
     conflict: Option<(u8, u8)>,
     next_check: Instant,
@@ -621,7 +630,7 @@ impl Engine {
     }
 
     fn connect(&mut self) {
-        if let Err(e) = Keyboard::find(self.opts.device.as_deref()).and_then(|kb| self.link_up(kb)) {
+        if let Err(e) = Keyboard::find(self.opts.device.as_deref(), self.model).and_then(|kb| self.link_up(kb)) {
             self.device = match &e {
                 Error::NotFound => Device::Missing,
                 Error::Access(..) => Device::NoAccess { error: e.to_string() },
@@ -642,6 +651,7 @@ impl Engine {
         let statics = kb.static_effects()?;
         let zones = zones(&mut kb, &statics)?;
         let effects = kb.effect_ids()?;
+        let multi = optional(kb.multi_cluster_ids().map(Some))?.unwrap_or_default();
         let (controls, rates) = read_controls(&mut kb)?;
         let now = Instant::now();
         let path = kb.path.display().to_string();
@@ -675,6 +685,7 @@ impl Engine {
             zones,
             statics,
             effects,
+            multi,
             held: None,
             conflict: None,
             next_check: now,
@@ -800,7 +811,7 @@ impl Engine {
                 if h.effect.as_ref() == Some(&e) {
                     return Ok(());
                 }
-                play(&mut link.kb, &link.effects, &link.statics, &e)?;
+                play(&mut link.kb, &link.effects, &link.multi, &link.statics, &e)?;
                 h.effect = Some(e);
                 (h.base, h.frame) = (None, vec![]); // colours repaint in full after an effect
             }
@@ -994,20 +1005,50 @@ mod tests {
     }
 
     #[test]
+    fn effects_for_all_clusters_run_as_one() {
+        let _serial = crate::testenv::serial();
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        let (statics, lists, multi) = (kb.static_effects().unwrap(), kb.effect_ids().unwrap(), kb.multi_cluster_ids().unwrap());
+        assert_eq!(multi, [0x0c, 0x13, 0x16, 0x17, 0x18, 0x19], "as the G316 lists them");
+        take(&mut kb, true).unwrap();
+        play(&mut kb, &lists, &multi, &statics, &Effect::parse("wave,period=3000").unwrap()).unwrap();
+        {
+            let st = fake.state();
+            assert_eq!((st.effects.len(), st.effects[&0xFF].0), (1, 2), "one wave, on cluster 0xFF: keys and bar on one clock");
+        }
+        // Cycle is not an all-cluster effect on the G316: it runs on each cluster.
+        play(&mut kb, &lists, &multi, &statics, &Effect::parse("cycle").unwrap()).unwrap();
+        let st = fake.state();
+        assert_eq!((st.effects[&0].0, st.effects[&1].0), (3, 3));
+    }
+
+    #[test]
     fn effects_run_on_every_cluster_or_fall_back_to_their_colour() {
         let _serial = crate::testenv::serial();
         let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
         let (statics, lists) = (kb.static_effects().unwrap(), kb.effect_ids().unwrap());
         take(&mut kb, true).unwrap();
-        play(&mut kb, &lists, &statics, &Effect::parse("wave,period=3000").unwrap()).unwrap();
+        play(&mut kb, &lists, &[], &statics, &Effect::parse("wave,period=3000").unwrap()).unwrap();
         {
             let st = fake.state();
             assert_eq!((st.effects[&0].0, st.effects[&1].0), (4, 4));
         }
-        play(&mut kb, &lists, &statics, &Effect::parse("ripple,color=ff0000").unwrap()).unwrap();
+        play(&mut kb, &lists, &[], &statics, &Effect::parse("ripple,color=ff0000").unwrap()).unwrap();
         let st = fake.state();
         assert_eq!(st.effects[&0].0, 5, "cluster 0 has ripple (0x17)");
         assert_eq!((st.effects[&1].0, &st.effects[&1].1[..3]), (1, &[255, 0, 0][..]), "cluster 1 shows the colour as Static");
+    }
+
+    #[test]
+    fn an_effect_for_some_clusters_never_goes_to_all() {
+        let _serial = crate::testenv::serial();
+        let (mut kb, fake) = fake::keyboard("g903-hero", fake::g903());
+        let (statics, lists) = (kb.static_effects().unwrap(), kb.effect_ids().unwrap());
+        take(&mut kb, true).unwrap();
+        // Even if the mouse listed breathe for all clusters, its DPI cluster stays untouched.
+        play(&mut kb, &lists, &[0x0a], &statics, &Effect::parse("breathe").unwrap()).unwrap();
+        let st = fake.state();
+        assert_eq!(st.effects.keys().copied().collect::<Vec<_>>(), [1], "the logo only");
     }
 
     #[test]
@@ -1045,8 +1086,8 @@ mod tests {
         // A built-in preset: the device runs the wave, no frames are sent.
         ok(e.handle(Request::Use { profile: Some("Wave".into()) }));
         e.step().unwrap();
-        assert_eq!(fake.state().effects[&0].0, 4);
-        assert_eq!(&fake.state().effects[&0].1[6..10], &[0x0b, 0xb8, 100, 1], "period 3000 ms, intensity, direction right");
+        assert_eq!(fake.state().effects[&0xFF].0, 2, "the all-cluster wave");
+        assert_eq!(&fake.state().effects[&0xFF].1[6..10], &[0x0b, 0xb8, 100, 1], "period 3000 ms, intensity, direction right");
         let frames = fake.state().frames;
         e.step().unwrap();
         assert_eq!(fake.state().frames, frames, "a running effect is not sent again");
@@ -1211,7 +1252,7 @@ mod tests {
         let (mut kb, fake) = fake::keyboard("g903-hero", fake::g903());
         update(&mut kb, &[], &[(1, [1, 2, 3])]).unwrap();
         let lists = kb.effect_ids().unwrap();
-        play(&mut kb, &lists, &[], &Effect::parse("ripple").unwrap()).unwrap(); // the logo has no ripple
+        play(&mut kb, &lists, &[], &[], &Effect::parse("ripple").unwrap()).unwrap(); // the logo has no ripple
         assert!(fake.state().effects.is_empty());
     }
 
@@ -1354,6 +1395,12 @@ mod tests {
         let mut e = Engine::new(Options { device: None, refresh: None }, false);
         e.connect();
         assert!(matches!(e.device, Device::Missing) && e.message.is_none(), "nothing plugged in: no message");
+        // A G903 beside an unplugged G316 is not taken for it (the replug of 2026-10-22).
+        let mouse = crate::testenv::init().join("sysfs/class/hidraw/hidraw-fake3");
+        crate::testenv::hid_node(&mouse, "0003:0000046D:0000C091", "02");
+        e.connect();
+        fs::remove_dir_all(&mouse).unwrap();
+        assert!(matches!(e.device, Device::Missing) && e.model.id == "g316-x-98");
         let file = crate::testenv::init().join("not-a-keyboard");
         fs::write(&file, "").unwrap();
         let mut e = Engine::new(Options { device: Some(file), refresh: None }, false);

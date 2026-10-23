@@ -136,7 +136,7 @@ fn engine_busy() -> String {
 }
 
 fn open(device: Option<PathBuf>) -> Result<Keyboard, String> {
-    Keyboard::find(device.as_deref()).map_err(|e| e.to_string())
+    Keyboard::find(device.as_deref(), layout::current()).map_err(|e| e.to_string())
 }
 
 fn run(device: Option<PathBuf>, args: &mut Vec<String>) -> Result<(), String> {

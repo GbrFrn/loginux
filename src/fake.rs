@@ -31,6 +31,8 @@ pub struct Spec {
     /// 0x8071 non-volatile capabilities: capability, then state and six parameters.
     pub nv: Vec<(u16, [u8; 7])>,
     pub ext_caps: u16,
+    /// 0x8071 effect IDs playable on all clusters at once (cluster 0xFF).
+    pub multi: Vec<u16>,
     /// 0x8081 zones.
     pub zones: Vec<u8>,
 }
@@ -124,6 +126,7 @@ pub fn g316() -> Spec {
             (0x0040, [1, 0, 0, 0, 0, 0, 0]),
         ],
         ext_caps: 0x0026,
+        multi: vec![0x000c, 0x0013, 0x0016, 0x0017, 0x0018, 0x0019],
         zones,
     }
 }
@@ -141,6 +144,7 @@ pub fn g903() -> Spec {
             (0x0008, [1, 0x07, 0, 0, 0, 0, 0]),
         ],
         ext_caps: 0x0004,
+        multi: vec![],
         zones: vec![],
     }
 }
@@ -258,10 +262,14 @@ fn answer(spec: &Spec, st: &mut State, feature: u16, function: u8, p: &[u8]) -> 
         }
         (0x8071, 0) => {
             let (cluster, effect) = (p[0], p[1]);
-            if cluster == 0xFF {
+            if (cluster, effect) == (0xFF, 0xFF) {
                 let [nh, nl] = spec.nv.iter().fold(0u16, |a, n| a | n.0).to_be_bytes();
                 let [eh, el] = spec.ext_caps.to_be_bytes();
-                return Ok(vec![0xFF, 0, spec.clusters.len() as u8, nh, nl, eh, el, 0]);
+                return Ok(vec![0xFF, 0, spec.clusters.len() as u8, nh, nl, eh, el, spec.multi.len() as u8]);
+            }
+            if cluster == 0xFF {
+                let [ih, il] = spec.multi.get(usize::from(effect)).ok_or(2u8)?.to_be_bytes();
+                return Ok(vec![0xFF, effect, ih, il, 0, 0, 0, 0]);
             }
             let (location, persistency, ids) = spec.clusters.get(usize::from(cluster)).ok_or(2u8)?;
             if effect == 0xFF {
@@ -275,7 +283,7 @@ fn answer(spec: &Spec, st: &mut State, feature: u16, function: u8, p: &[u8]) -> 
             if st.sw.0 & 1 == 0 {
                 return Err(5); // not allowed without software control of the clusters
             }
-            let ids = &spec.clusters.get(usize::from(p[0])).ok_or(2u8)?.2;
+            let ids = if p[0] == 0xFF { &spec.multi } else { &spec.clusters.get(usize::from(p[0])).ok_or(2u8)?.2 };
             if usize::from(p[1]) >= ids.len() {
                 return Err(2);
             }

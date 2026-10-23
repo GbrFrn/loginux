@@ -55,6 +55,9 @@ static below come from it.
     byte 7 whether function 2 may set which of the cluster's LEDs are on.
     (static)
   - `[cluster i 00]`: bytes 2 and 3 are effect `i`'s ID; `0x0001` is Static. (live)
+  - Byte 7 of the `[ff ff 00]` reply is the number of multi-cluster effects,
+    which play on all clusters at once (static), and `[ff i 00]` reads them
+    like a cluster's effects (live on the G316).
 - Function 5, software control:
   - `[00]` reads `00, control, events`.
   - `[01 control events]` sets them.
@@ -68,6 +71,12 @@ static below come from it.
 - Function 1 `setEffect`: `[cluster, effect index, 10 parameter bytes, persistence]`.
   - For Static the parameters are `R G B` followed by seven zeros.
   - It fails with error 5 unless control bit 0 is set. (live)
+  - Cluster `0xFF` applies a multi-cluster effect to all clusters, by its
+    index in the `[ff i 00]` list, so they share one clock. (static) Separate
+    effects per cluster each run on their own. Function 6
+    `setEffectSyncCorrection` and the effect-sync event correct drift between
+    clusters or devices instead; extended capability `0x0010` marks a device
+    without them. (static)
   - Persistence bit 0 applies the effect in RAM and bit 1 saves it to
     EEPROM; bits 2 and 3 pick the power mode it is for (0 full power, 1 power
     save). Loginux always sends `01`, so nothing is saved. (static, from the

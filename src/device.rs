@@ -172,6 +172,11 @@ fn probe_on(io: Hidpp, path: &Path, identity: (u16, u16, u8, String)) -> Result<
                 lighting.push(format!("0x8071 cluster {cluster} effect {e}: {}", hex(&r[..10])));
             }
         }
+        // Effects the device can run on all clusters at once (cluster 0xFF).
+        for e in 0..info[7] {
+            let r = kb.call(RGB_EFFECTS, index, 0, &[0xFF, e, 0])?;
+            lighting.push(format!("0x8071 all clusters effect {e}: {}", hex(&r[..10])));
+        }
         // manageNvConfig get for each non-volatile capability the device lists;
         // 0x0008 eventsDisplay decides when DPI-status LEDs light.
         let nv = u16::from_be_bytes([info[3], info[4]]);
@@ -224,8 +229,10 @@ fn probe_on(io: Hidpp, path: &Path, identity: (u16, u16, u8, String)) -> Result<
 }
 
 impl Keyboard {
-    /// The keyboard at `path`, or else the first supported one plugged in.
-    pub fn find(path: Option<&Path>) -> Result<Self, Error> {
+    /// The keyboard at `path`, or else the plugged-in device of `model`. Without a
+    /// path no other definition is tried, so a mouse plugged in beside the
+    /// keyboard is never taken for it while the keyboard is away.
+    pub fn find(path: Option<&Path>, model: &'static Model) -> Result<Self, Error> {
         #[cfg(test)]
         if let Some(path) = path
             && let Some((io, model)) = crate::fake::plugged(path)
@@ -234,7 +241,7 @@ impl Keyboard {
         }
         let (path, model) = match path {
             Some(path) => (path.to_path_buf(), hidpp::identify(path, crate::layout::models())?),
-            None => hidpp::find(crate::layout::models())?,
+            None => hidpp::find(std::slice::from_ref(model))?,
         };
         Self::open(&path, model)
     }
@@ -370,7 +377,20 @@ impl Keyboard {
         Ok(all)
     }
 
-    /// Any listed effect on one cluster, applied in RAM (persistence 0x01).
+    /// IDs of the effects the device can play on all its clusters at once
+    /// (cluster 0xFF), in effect-index order. One such effect runs on one clock,
+    /// so the clusters stay in step.
+    pub fn multi_cluster_ids(&mut self) -> Result<Vec<u16>, Error> {
+        let count = self.call(RGB_EFFECTS, self.rgb, 0, &[0xFF, 0xFF, 0])?[7];
+        let mut ids = vec![];
+        for i in 0..count {
+            let r = self.call(RGB_EFFECTS, self.rgb, 0, &[0xFF, i, 0])?;
+            ids.push(u16::from_be_bytes([r[2], r[3]]));
+        }
+        Ok(ids)
+    }
+
+    /// Any listed effect on one cluster, or on all of them (0xFF), applied in RAM (persistence 0x01).
     pub fn set_effect(&mut self, cluster: u8, index: u8, params: [u8; 10]) -> Result<(), Error> {
         let mut msg = [0u8; 13];
         msg[0] = cluster;
@@ -581,7 +601,7 @@ mod tests {
     #[test]
     fn probe_reads_an_older_colour_led_device() {
         // No feature set and no 0x8071: 0x8070 colour LED effects only.
-        let spec = fake::Spec { features: vec![0x0000, 0x0003, 0x8070], clusters: vec![], nv: vec![], ext_caps: 0, zones: vec![] };
+        let spec = fake::Spec { features: vec![0x0000, 0x0003, 0x8070], clusters: vec![], nv: vec![], ext_caps: 0, multi: vec![], zones: vec![] };
         let (io, _fake) = fake::transport(spec, 0xFF);
         let p = probe_on(io, Path::new("/dev/fake"), (0x046d, 0xc33f, 1, "Old".into())).unwrap();
         assert!(p.features.is_empty() && !p.rgb_effects && !p.per_key && p.zones.is_empty());
@@ -614,8 +634,22 @@ mod tests {
         assert!(matches!(probe(Path::new("/dev/zero")), Err(Error::WrongDevice(_))));
         let g316 = crate::layout::find("g316-x-98").unwrap();
         assert!(matches!(Keyboard::open(Path::new("/dev/null"), g316), Err(Error::Gone(_))));
-        assert!(matches!(Keyboard::find(Some(Path::new("/dev/null"))), Err(Error::Gone(_))));
-        assert!(matches!(Keyboard::find(Some(Path::new("/nonexistent/hidraw9"))), Err(Error::Access(..))));
+        assert!(matches!(Keyboard::find(Some(Path::new("/dev/null")), g316), Err(Error::Gone(_))));
+        assert!(matches!(Keyboard::find(Some(Path::new("/nonexistent/hidraw9")), g316), Err(Error::Access(..))));
+    }
+
+    #[test]
+    fn without_a_path_only_the_given_model_is_looked_for() {
+        let _serial = crate::testenv::serial();
+        let (g316, g903) = (crate::layout::find("g316-x-98").unwrap(), crate::layout::find("g903-hero").unwrap());
+        // A G903 is plugged in, the G316 is not: the mouse is not taken for the keyboard.
+        let mouse = crate::testenv::init().join("sysfs/class/hidraw/hidraw-fake3");
+        crate::testenv::hid_node(&mouse, "0003:0000046D:0000C091", "02");
+        let keyboard = Keyboard::find(None, g316).err();
+        let found = Keyboard::find(None, g903).err();
+        std::fs::remove_dir_all(&mouse).unwrap();
+        assert!(matches!(keyboard, Some(Error::NotFound)));
+        assert!(matches!(found, Some(Error::Access(path, _)) if path == Path::new("/dev/hidraw-fake3")), "found, then opened");
     }
 
     #[test]

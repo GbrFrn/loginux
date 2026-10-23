@@ -38,6 +38,10 @@ device's RAM, so unplugging it always brings back the onboard lighting.
 | Logitech G316 X 98 | 95 keys and the 30-segment light bar |
 | Logitech G903 HERO, on its cable | the logo ([why not the DPI lights](research/g903.md)) |
 
+Loginux drives one device at a time: the one `config.toml` names (see
+[Run at login](docs/usage.md#run-at-login)). With a keyboard and a mouse
+plugged in, the other device keeps its onboard lighting.
+
 ## Install
 
 On Arch Linux, CachyOS and other Arch-based systems (x86_64), download the
