@@ -982,7 +982,15 @@ impl Engine {
                     h.base = Some(base);
                     h.frame = frame;
                 } else if h.frame != frame || refresh_due {
-                    update(&mut link.kb, &link.statics, &frame)?;
+                    // Only the zones that changed: the keyboard keeps each zone a frame
+                    // leaves out, which Solaar's single-key write and G HUB's Esc change
+                    // rely on. A live edit of one key then costs one report, not 34.
+                    let changed: Vec<(u8, Rgb)> = if refresh_due || h.frame.len() != frame.len() {
+                        frame.clone()
+                    } else {
+                        frame.iter().zip(&h.frame).filter(|(new, old)| new != old).map(|(new, _)| *new).collect()
+                    };
+                    update(&mut link.kb, &link.statics, &changed)?;
                     h.frame = frame;
                 } else {
                     return Ok(());
@@ -1274,6 +1282,38 @@ mod tests {
         assert!(matches!(e.status().control, Control::Onboard));
         assert!(matches!(e.handle(Request::Use { profile: Some("T missing".into()) }), Reply::Err(_)));
         profile::delete("T evening").unwrap();
+    }
+
+    #[test]
+    fn a_live_edit_sends_only_the_zones_that_changed() {
+        let _serial = crate::testenv::serial();
+        let (mut e, fake) = linked();
+        colours("T delta", [1, 1, 1]);
+        ok(e.handle(Request::Use { profile: Some("T delta".into()) }));
+        e.step().unwrap();
+        let staged = |f: &Fake| f.requests(0x8081).iter().filter(|r| r.0 == 1).count();
+        let (before, shown) = (staged(&fake), fake.state().shown.clone());
+        // Dragging the colour of Esc: each step stages Esc alone, then commits.
+        for shade in [10, 20, 30] {
+            let mut p = profile::load(e.model, "T delta").unwrap();
+            p.zones.insert(38, [shade; 3]);
+            ok(e.handle(Request::Preview { profile: Some(p) }));
+            e.step().unwrap();
+        }
+        assert_eq!(staged(&fake) - before, 3, "one report a step, not the whole board");
+        {
+            let st = fake.state();
+            assert_eq!(st.shown[&38], [30; 3]);
+            assert!(st.shown.iter().filter(|(z, _)| **z != 38).all(|(z, c)| shown[z] == *c), "every other zone kept");
+        }
+        // A refresh sends the whole frame again.
+        let frame = e.link.as_ref().unwrap().held.as_ref().unwrap().frame.len();
+        let before = staged(&fake);
+        e.link.as_mut().unwrap().next_refresh = Some(Instant::now());
+        e.step().unwrap();
+        assert_eq!(staged(&fake) - before, frame.div_ceil(4));
+        profile::set_active(None).unwrap();
+        profile::delete("T delta").unwrap();
     }
 
     #[test]

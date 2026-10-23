@@ -127,7 +127,10 @@ on the G903; the cause is inference, see [g903.md](g903.md))
 4. Stage the frame and commit it with frameEnd. Send the first frame twice,
    because the first frame after a claim can be dropped; Solaar does the
    same.
-5. From then on, send only changed frames.
+5. From then on, stage only the zones that changed, then commit. The
+   keyboard keeps every zone a frame leaves out: Solaar's single-key write
+   relies on it (static), and G HUB changed Esc alone with one range
+   (live, Windows). Loginux sends the whole frame again only on a refresh.
 6. To stop, write back the remembered mode with bit 0 cleared. The firmware
    reloads its onboard effects, and unplugging the device resets everything
    anyway.

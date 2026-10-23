@@ -289,6 +289,10 @@ struct Outbox {
 struct Link(Arc<(Mutex<Outbox>, Condvar)>);
 
 const POLL: Duration = if cfg!(test) { Duration::from_millis(100) } else { Duration::from_secs(1) };
+/// Previews go out at most this often. A drag changes the colour every frame, up to
+/// the display's rate and faster than the keyboard draws; the newest preview
+/// replaces the ones in between.
+const PREVIEW_EVERY: Duration = Duration::from_millis(16);
 
 impl Link {
     fn start(ctx: egui::Context) -> Link {
@@ -296,18 +300,32 @@ impl Link {
         let inner = link.0.clone();
         thread::spawn(move || {
             let (lock, wake) = &*inner;
+            let mut previewed: Option<Instant> = None;
             loop {
                 let req = {
                     let mut out = lock.lock().expect("link lock");
                     if out.requests.is_empty() && out.preview.is_none() && !out.quit {
                         out = wake.wait_timeout(out, POLL).expect("link lock").0;
                     }
+                    while let Some(wait) = previewed.map(|t| PREVIEW_EVERY.saturating_sub(t.elapsed())).filter(|w| !w.is_zero())
+                        && out.requests.is_empty()
+                        && out.preview.is_some()
+                        && !out.quit
+                    {
+                        out = wake.wait_timeout(out, wait).expect("link lock").0;
+                    }
                     if out.quit {
                         return;
                     }
                     match out.requests.pop_front() {
                         Some(r) => r,
-                        None => out.preview.take().map_or(Request::Status, |p| Request::Preview { profile: p }),
+                        None => match out.preview.take() {
+                            Some(p) => {
+                                previewed = Some(Instant::now());
+                                Request::Preview { profile: p }
+                            }
+                            None => Request::Status,
+                        },
                     }
                 };
                 let result = ipc::request(&req);
@@ -2639,6 +2657,98 @@ mod tests {
                 let _ = std::fs::remove_file(crate::testenv::systemd().join(file));
             }
         }
+    }
+
+    /// Not a check but a measurement: the CPU one frame costs (layout, then
+    /// tessellation), with the pointer sweeping the board. Run it with
+    /// `cargo test --release frame_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn frame_cost() {
+        let _serial = crate::testenv::serial();
+        forget_claims();
+        let mut p = Profile::default();
+        for (i, z) in g316().zones.iter().enumerate() {
+            p.zones.insert(z.id, [(i * 7) as u8, (i * 13) as u8, 200]);
+        }
+        profile::save(g316(), "T bench", &p).unwrap();
+        let _kb = crate::fake::plug("/dev/fake-bench", "g316-x-98", crate::fake::g316());
+        let mut w = Window::hosting(Some("/dev/fake-bench"));
+        w.click("T bench");
+        w.until("connected", |w| w.app.connected_zones().is_some());
+        w.app.selection = Set::Keys.zones(w.app.model).into_iter().collect();
+        w.app.sync_picker();
+        w.run(3);
+        let board = w.find("keyboard map");
+        for (tab, name) in [(Tab::Edit, "EDIT"), (Tab::Settings, "SETTINGS"), (Tab::Check, "CHECK")] {
+            w.app.tab = tab;
+            w.run(3);
+            let frames = 400;
+            let (mut layout, mut tess) = (Duration::ZERO, Duration::ZERO);
+            for i in 0..frames {
+                let pos = pos2(board.min.x + (i as f32 * 3.7) % board.width(), board.center().y);
+                let input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1360.0, 840.0))),
+                    events: vec![egui::Event::PointerMoved(pos)],
+                    ..Default::default()
+                };
+                let (app, frame) = (&mut w.app, &mut w.frame);
+                let t = Instant::now();
+                let mut out = w.ctx.run_ui(input, |ui| app.ui(ui, frame));
+                layout += t.elapsed();
+                out.textures_delta.clear();
+                let t = Instant::now();
+                std::hint::black_box(w.ctx.tessellate(out.shapes, out.pixels_per_point));
+                tess += t.elapsed();
+            }
+            let per = |d: Duration| d.as_secs_f64() * 1000.0 / f64::from(frames);
+            let frame_ms = per(layout) + per(tess);
+            eprintln!(
+                "{name}: {frame_ms:.2} ms a frame ({:.2} layout, {:.2} tessellation); a pointer moving at 240 Hz keeps {:.0}% of a core busy",
+                per(layout),
+                per(tess),
+                frame_ms * 240.0 / 10.0
+            );
+        }
+        profile::delete("T bench").unwrap();
+        forget_claims();
+    }
+
+    /// Not a check but a measurement: keyboard traffic while a colour is dragged at
+    /// the display's 240 Hz, for one key and for all keys. Run it with
+    /// `cargo test --release drag_traffic -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn drag_traffic() {
+        let _serial = crate::testenv::serial();
+        forget_claims();
+        scratch_profile("T drag", [1, 1, 1]);
+        let kb = crate::fake::plug("/dev/fake-drag", "g316-x-98", crate::fake::g316());
+        let mut w = Window::hosting(Some("/dev/fake-drag"));
+        w.click("T drag");
+        w.until("connected", |w| w.app.connected_zones().is_some());
+        let count = |function: u8| kb.requests(0x8081).iter().filter(|r| r.0 == function).count();
+        for (name, selection) in [("one key", vec![38u8]), ("all keys", Set::Keys.zones(w.app.model))] {
+            w.app.selection = selection.into_iter().collect();
+            w.run(5);
+            thread::sleep(Duration::from_millis(100));
+            let (frames, reports) = (count(7), count(1));
+            let start = Instant::now();
+            let mut i = 0u8;
+            while start.elapsed() < Duration::from_secs(2) {
+                i = i.wrapping_add(1);
+                w.app.paint_selection([i, 255 - i, 128]);
+                w.run(1);
+                thread::sleep(Duration::from_micros(4167));
+            }
+            thread::sleep(Duration::from_millis(100));
+            let secs = start.elapsed().as_secs_f64();
+            let (f, r) = ((count(7) - frames) as f64 / secs, (count(1) - reports) as f64 / secs);
+            eprintln!("{name}: {f:.0} frames/s drawn, {r:.0} staging reports/s, {:.0} keyboard round trips/s", f + r);
+        }
+        ok_use_none(&mut w);
+        profile::delete("T drag").unwrap();
+        forget_claims();
     }
 
     fn forget_claims() {

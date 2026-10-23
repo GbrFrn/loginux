@@ -258,7 +258,8 @@ A paint takes control, sets the Static effect on each lighting cluster, sends
 the frame and commits it. An effect is sent once. When it covers every cluster
 and the device lists it among the effects it can play on all clusters at once,
 it goes to cluster `0xFF`, so keys and light bar run on one clock; otherwise
-each cluster gets its own. After that only changed frames are sent, and the
+each cluster gets its own. After that a change stages only the zones that
+changed, at most about 60 frames a second while you drag a colour, and the
 claim is checked every two seconds; if the keyboard reset itself, Loginux paints
 again. A single engine owns the keyboard at a time (a lock in
 `$XDG_RUNTIME_DIR/loginux`), and the editor and the command line talk to it over a
