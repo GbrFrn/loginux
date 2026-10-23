@@ -5,6 +5,7 @@ The README has the short version; this page has the rest.
 - [Install from source](#install-from-source)
 - [The editor](#the-editor)
 - [The tray icon](#the-tray-icon)
+- [Notifications](#notifications)
 - [Command line](#command-line)
 - [Profiles](#profiles) and [effects](#effects)
 - [Device settings](#device-settings)
@@ -70,6 +71,24 @@ AppIndicator extension. The menu names the device and the profile in use,
 switches profiles (Onboard Lighting hands the lighting back), opens the editor
 (so does a left click), and Quit stops the service until the next login,
 handing the lighting back.
+
+## Notifications
+
+The engine tells the desktop when something changes that you may not be
+watching:
+
+- a profile chosen from the tray, the editor or the command line, or the
+  lighting handed back to the keyboard;
+- a report-rate change you asked for, read back or refused;
+- a kept report rate that could not be set again after a reconnect (one that
+  could is not announced, since that happens at every login and replug);
+- the lighting taken by another program.
+
+The profile in use when the engine starts is not announced, and a new
+notification replaces the last one. They are sent through
+`org.freedesktop.Notifications` with `busctl`, which comes with systemd. To
+turn them off, find Loginux in the desktop's notification settings (on KDE
+Plasma: System Settings, Notifications, Applications).
 
 ## Command line
 
@@ -161,12 +180,14 @@ to onboard mode right after, the switch Solaar makes when it claims and
 releases a device; G HUB makes the same host switch before its rate writes. The
 keyboard forgets the rate when it reconnects and comes back at its own (1000 Hz
 on the G316 X 98). So, like G HUB, Loginux keeps the rate you chose and sends
-it again when the keyboard connects at another rate: at most three times in ten
-minutes, and never a rate the keyboard refused. Choosing the keyboard's own
-rate stops the writes. A rate the keyboard still refuses is marked and not
-offered again (kept in `~/.config/loginux/rates/`; delete that file to try it
-once more). Brightness and game-mode changes are not offered: their commands on
-the G316 are not verified.
+it again when the keyboard connects at another rate, never a rate the keyboard
+refused. If the keyboard drops off within a minute of three such sends in ten
+minutes, Loginux stops sending until you choose a rate, so a keyboard that
+leaves after every write cannot loop; ordinary replugs do not count. Choosing
+the keyboard's own rate stops the writes. A rate the keyboard still refuses is
+marked and not offered again (kept in `~/.config/loginux/rates/`; delete that
+file to try it once more). Brightness and game-mode changes are not offered:
+their commands on the G316 are not verified.
 [G316 extra controls](../research/g316-extra-controls.md) has the evidence.
 
 ## Run at login

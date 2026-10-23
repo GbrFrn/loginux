@@ -56,15 +56,16 @@ the engine sent 8000 Hz again as it connected and read it back 5 s later,
 with no further re-enumeration. Making a rate permanent on the keyboard would
 mean writing the onboard profile, which Loginux does not do.
 
-Rate selection is an explicit user action, and a rate is not part of a
-lighting profile. The first plan ruled out any automatic rate write at
-startup, login or replug. Once the keyboard turned out to forget its rate on
-every reconnect, the owner chose G HUB's behaviour instead (2026-10-23): the
-engine keeps the rate the user chose and sends it again when the keyboard
-connects at another rate. It sends it at most three times in ten minutes, so
-a keyboard that drops off after each write cannot loop, and never sends a
-rate the keyboard refused. Before a live Linux verification, record the
-current index and agree on the intended value with the owner.
+Rate selection is an explicit user action, and a rate is not part of a lighting
+profile. The first plan ruled out any automatic rate write at startup, login or
+replug. Once the keyboard turned out to forget its rate on every reconnect, the
+owner chose G HUB's behaviour instead (2026-10-23): the engine keeps the rate
+the user chose and sends it again when the keyboard connects at another rate,
+and never sends a rate the keyboard refused. A send the keyboard drops off
+within a minute of looks like the write making it leave; after three of those
+in ten minutes the engine stops sending until the user chooses a rate, so it
+cannot loop. Ordinary replugs do not count. Before a live Linux verification,
+record the current index and agree on the intended value with the owner.
 
 ## Brightness and game mode
 

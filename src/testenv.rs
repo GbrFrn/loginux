@@ -3,8 +3,9 @@
 //! of the device definitions and of sysfs calls it first in a test build, so no
 //! test reads or writes the real ~/.config/loginux or sees the machine's own
 //! devices. The session bus address points into the scratch folder as well,
-//! where nothing listens unless a test starts its own bus, and `systemctl` is a
-//! stand-in script (tests/stand-ins) that never reaches systemd.
+//! where nothing listens unless a test starts its own bus, and `systemctl` and
+//! `busctl` are stand-in scripts (tests/stand-ins) that never reach systemd or
+//! the desktop.
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
@@ -39,6 +40,7 @@ pub fn init() -> &'static Path {
         crate::hidpp::use_sysfs(sysfs);
         std::fs::create_dir_all(root.join("systemd")).expect("the stand-in systemctl's folder");
         crate::ui::use_systemctl(stand_in_program("systemctl"));
+        crate::notify::use_busctl(stand_in_program("busctl"));
         // SAFETY: this runs once, inside call_once, before any test reads these
         // variables: every test that reaches them calls init() first and waits here.
         unsafe {

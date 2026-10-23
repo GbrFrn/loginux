@@ -29,6 +29,7 @@ device's RAM, so unplugging it always brings back the onboard lighting.
   the AppIndicator extension).
 - Profiles are plain TOML files, and a background service keeps the chosen
   one applied.
+- Desktop notifications when the profile or the report rate changes.
 - A new device is a data file, not code: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Supported devices

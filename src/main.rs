@@ -9,6 +9,7 @@ mod hidpp;
 mod icon;
 mod ipc;
 mod layout;
+mod notify;
 mod pixelfont;
 mod profile;
 #[cfg(test)]

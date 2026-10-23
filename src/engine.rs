@@ -14,6 +14,7 @@ use crate::effects::{self, Effect};
 use crate::hidpp::Error;
 use crate::ipc::{self, Control, Controls, Device, RateChange, Reply, Request, Status};
 use crate::layout::{self, Kind, Model};
+use crate::notify;
 use crate::profile::{self, Profile, Rgb};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -43,10 +44,13 @@ const RATE_READBACK: Duration = if cfg!(test) { Duration::from_millis(300) } els
 const RATE_GIVE_UP: Duration = Duration::from_secs(20);
 /// The keyboard does not save its report rate, so the engine sends the rate the
 /// user chose again when the keyboard connects at another one, as G HUB does.
-/// ponytail: at most RESTORES sends per RESTORE_WINDOW, so a keyboard that drops
-/// off after each send cannot loop; choosing a rate starts the count again.
+/// A send the keyboard drops off within RESTORE_SETTLE of looks like the write
+/// making it leave: after RESTORES of those in RESTORE_WINDOW the engine stops
+/// sending until the user chooses a rate, so it cannot loop. Replugs after the
+/// rate held do not count.
 const RESTORES: usize = 3;
 const RESTORE_WINDOW: Duration = Duration::from_secs(600);
+const RESTORE_SETTLE: Duration = Duration::from_secs(60);
 
 pub fn install_signal_handlers() {
     extern "C" fn on_signal(_: libc::c_int) {
@@ -367,8 +371,14 @@ struct Engine {
     message: Option<String>,
     rate_pending: Option<RatePending>,
     rate_change: Option<RateChange>,
-    /// When the engine sent the kept rate again, within RESTORE_WINDOW.
-    restored: Vec<Instant>,
+    /// When the engine last sent the kept rate again, on this connection.
+    restored: Option<Instant>,
+    /// When the keyboard dropped off soon after such a send, within RESTORE_WINDOW.
+    dropped: Vec<Instant>,
+    /// The profile choice last read from config.toml (inner None: onboard
+    /// lighting), so a change made anywhere is announced once; None until the
+    /// first read, which is not announced.
+    chosen: Option<Option<String>>,
 }
 
 fn log(msg: &str) {
@@ -461,7 +471,9 @@ impl Engine {
             message: None,
             rate_pending: None,
             rate_change: None,
-            restored: vec![],
+            restored: None,
+            dropped: vec![],
+            chosen: None,
         }
     }
 
@@ -552,6 +564,7 @@ impl Engine {
                     link.controls.report_rate_refused = link.refused.clone();
                 }
                 log(&format!("report-rate change refused: {error}"));
+                self.rate_note(hz, auto, Some(&error));
                 self.rate_change = Some(RateChange::Failed { hz, error: error.clone() });
                 Err(error)
             }
@@ -567,18 +580,37 @@ impl Engine {
                 self.keep_rate(p.hz);
             }
         }
-        self.rate_change = Some(match current {
+        let error = match current {
             Some(i) if i == p.index => {
                 log(&format!("report rate read back as {} Hz", p.hz));
-                RateChange::Done { hz: p.hz }
+                None
             }
             Some(i) => {
                 let got = RATES_HZ.get(usize::from(i)).map_or_else(|| format!("index {i}"), |r| format!("{r} Hz"));
                 log(&format!("report rate read back as {got}, not {} Hz", p.hz));
-                RateChange::Failed { hz: p.hz, error: format!("the keyboard reports {got}") }
+                Some(format!("the keyboard reports {got}"))
             }
-            None => RateChange::Failed { hz: p.hz, error: "the keyboard did not report its rate after the change".into() },
+            None => Some("the keyboard did not report its rate after the change".into()),
+        };
+        self.rate_note(p.hz, p.auto, error.as_deref());
+        self.rate_change = Some(match error {
+            None => RateChange::Done { hz: p.hz },
+            Some(error) => RateChange::Failed { hz: p.hz, error },
         });
+    }
+
+    /// Puts how a report-rate change ended on the desktop. A set-back after a
+    /// reconnect that worked is routine, like repainting, and stays quiet.
+    fn rate_note(&self, hz: u32, auto: bool, error: Option<&str>) {
+        let keyboard = &self.model.name;
+        match error {
+            None if auto => {}
+            None => notify::send(
+                &format!("Report rate: {hz} Hz"),
+                &format!("Read back from the {keyboard}. Loginux sets it again after every reconnect."),
+            ),
+            Some(e) => notify::send(if auto { "Report rate not restored" } else { "Report rate not changed" }, &format!("{hz} Hz: {e}.")),
+        }
     }
 
     /// A rate the keyboard took is no longer refused, whatever an earlier
@@ -596,7 +628,7 @@ impl Engine {
     /// Remembers the rate the user chose, for this device and across restarts,
     /// and starts the count of automatic sends again.
     fn keep_rate(&mut self, hz: u32) {
-        self.restored.clear();
+        self.dropped.clear();
         if let Some(link) = &mut self.link
             && link.kept != Some(hz)
         {
@@ -615,14 +647,13 @@ impl Engine {
             return;
         }
         let now = Instant::now();
-        self.restored.retain(|&t| now - t < RESTORE_WINDOW);
-        if self.restored.len() >= RESTORES {
-            return self.say(&format!(
-                "not restoring the report rate to {hz} Hz: it was sent {RESTORES} times in {} minutes and the keyboard keeps coming back at another rate; choose a rate to try again",
-                RESTORE_WINDOW.as_secs() / 60
-            ));
+        self.dropped.retain(|&t| now - t < RESTORE_WINDOW);
+        if self.dropped.len() >= RESTORES {
+            let why = format!("the keyboard dropped off within a minute of each of the last {RESTORES} sends");
+            notify::send("Report rate not restored", &format!("{hz} Hz: {why}. Choose a rate to try again."));
+            return self.say(&format!("not restoring the report rate to {hz} Hz: {why}; choose a rate to try again"));
         }
-        self.restored.push(now);
+        self.restored = Some(now);
         if let Err(e) = self.set_report_rate(hz, true) {
             log(&format!("could not restore the report rate to {hz} Hz: {e}"));
         }
@@ -654,11 +685,13 @@ impl Engine {
         if self.link.is_none() && now >= self.retry_at {
             self.connect();
         }
-        if self.link.is_none() && self.rate_pending.as_ref().is_some_and(|p| now - p.sent > RATE_GIVE_UP) {
-            let hz = self.rate_pending.take().map_or(0, |p| p.hz);
+        if self.link.is_none()
+            && let Some(p) = self.rate_pending.take_if(|p| now - p.sent > RATE_GIVE_UP)
+        {
             let error = format!("the keyboard did not come back within {} s; Loginux keeps looking for it", RATE_GIVE_UP.as_secs());
-            self.say(&format!("report-rate change to {hz} Hz: {error}"));
-            self.rate_change = Some(RateChange::Failed { hz, error });
+            self.say(&format!("report-rate change to {} Hz: {error}", p.hz));
+            self.rate_note(p.hz, p.auto, Some(&error));
+            self.rate_change = Some(RateChange::Failed { hz: p.hz, error });
         }
         if self.link.is_some()
             && let Err(e) = self.step()
@@ -670,6 +703,9 @@ impl Engine {
                 self.say(&e.to_string());
             }
             self.link = None; // closes the node; a claim stays recorded in the marker
+            if self.restored.take().is_some_and(|t| gone && now - t < RESTORE_SETTLE) {
+                self.dropped.push(now);
+            }
             self.device = if gone { Device::Missing } else { Device::Failed { error: e.to_string() } };
             self.retry_at = now + if gone { Duration::from_millis(500) } else { Duration::from_secs(5) };
         }
@@ -687,7 +723,7 @@ impl Engine {
         self.next_reload = Instant::now() + Duration::from_secs(1);
         let Some(name) = profile::active() else {
             self.active = None;
-            return;
+            return self.announce(None);
         };
         let Ok(path) = profile::path(&name) else {
             self.active = None;
@@ -700,6 +736,7 @@ impl Engine {
         match profile::load(self.model, &name) {
             Ok(p) => {
                 log(&format!("profile {name:?} loaded"));
+                self.announce(Some(&name));
                 self.active = Some((name, p, stamp));
             }
             // Keep painting the last good version of the same profile while its file is broken.
@@ -714,6 +751,23 @@ impl Engine {
                 self.say(&e);
             }
         }
+    }
+
+    /// Puts a profile choice made anywhere (tray, editor, command line) on the
+    /// desktop, once; the choice read at start is not announced.
+    fn announce(&mut self, name: Option<&str>) {
+        let choice = name.map(str::to_string);
+        if self.chosen.as_ref() == Some(&choice) {
+            return;
+        }
+        if self.chosen.is_some() {
+            let keyboard = &self.model.name;
+            match name {
+                Some(n) => notify::send(&format!("Profile: {n}"), &format!("Loginux applies it to the {keyboard}.")),
+                None => notify::send("Onboard lighting", &format!("The {keyboard} runs its own lighting again.")),
+            }
+        }
+        self.chosen = Some(choice);
     }
 
     fn connect(&mut self) {
@@ -867,6 +921,7 @@ impl Engine {
 
         if now >= link.next_check {
             link.next_check = now + CHECK_EVERY;
+            let had_conflict = link.conflict.is_some();
             let state = link.kb.sw_control()?;
             if let Some(h) = &link.held
                 && state != h.state
@@ -900,6 +955,9 @@ impl Engine {
             }
             if link.conflict.is_none() {
                 self.take_over = false; // a take-over answers one conflict, never a later one
+            } else if !had_conflict {
+                let body = format!("Loginux stopped painting the {}. TAKE OVER in the editor takes it back.", link.kb.model.name);
+                notify::send("Lighting taken by another program", &body);
             }
         }
 
@@ -1342,6 +1400,84 @@ mod tests {
         fake.requests(0x8061).iter().filter(|r| r.0 == 3).count()
     }
 
+    /// Connects a new G316, at its own 1000 Hz.
+    fn plug_in(e: &mut Engine) -> Fake {
+        let (kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        e.link_up(kb).unwrap();
+        fake
+    }
+
+    /// Unplugs it the way the engine notices: on its next tick.
+    fn pull(e: &mut Engine, fake: &Fake) {
+        fake.unplug();
+        e.tick();
+        assert!(e.link.is_none());
+    }
+
+    /// What the stand-in busctl was asked to show so far, as `summary|body`.
+    fn notes() -> Vec<String> {
+        let text = fs::read_to_string(crate::testenv::systemd().join("notes")).unwrap_or_default();
+        text.lines().filter_map(|l| l.split_once('|')).map(|(_, note)| note.to_string()).collect()
+    }
+
+    /// Reads a pending rate change back the way the engine does, on its next step.
+    fn read_back(e: &mut Engine) {
+        e.rate_pending.as_mut().unwrap().sent -= RATE_READBACK;
+        e.step().unwrap();
+        assert!(e.rate_pending.is_none());
+    }
+
+    #[test]
+    fn changes_are_announced_on_the_desktop() {
+        let _serial = crate::testenv::serial();
+        let g316 = layout::find("g316-x-98").unwrap();
+        let name = &g316.name;
+        let _ = fs::remove_file(crate::testenv::systemd().join("notes"));
+        let _ = fs::remove_file(profile::rates_path(g316));
+        profile::set_active(Some("Wave")).unwrap();
+        let (mut e, fake) = linked();
+        e.reload(); // the choice found at start is not announced
+        e.reload(); // nor one read again unchanged
+        ok(e.handle(Request::Use { profile: Some("Breathing".into()) }));
+        ok(e.handle(Request::Use { profile: None }));
+        ok(e.handle(Request::SetReportRate { hz: 2000 }));
+        read_back(&mut e);
+        fake.state().refuse_rate = Some((6, 2));
+        assert!(matches!(e.handle(Request::SetReportRate { hz: 8000 }), Reply::Err(_)));
+        // Another program takes the lighting from under a profile: said once.
+        ok(e.handle(Request::Use { profile: Some("Breathing".into()) }));
+        fake.state().sw = (1, 5);
+        for _ in 0..2 {
+            e.link.as_mut().unwrap().next_check = Instant::now();
+            e.step().unwrap();
+        }
+        assert_eq!(
+            notes(),
+            [
+                format!("Profile: Breathing|Loginux applies it to the {name}."),
+                format!("Onboard lighting|The {name} runs its own lighting again."),
+                format!("Report rate: 2000 Hz|Read back from the {name}. Loginux sets it again after every reconnect."),
+                "Report rate not changed|8000 Hz: the keyboard refused 8000 Hz (HID++ error 0x02); it stays at 2000 Hz.".into(),
+                format!("Profile: Breathing|Loginux applies it to the {name}."),
+                format!("Lighting taken by another program|Loginux stopped painting the {name}. TAKE OVER in the editor takes it back."),
+            ]
+        );
+        // A set-back after a reconnect is routine and quiet; one that fails is said.
+        let _ = fs::remove_file(crate::testenv::systemd().join("notes"));
+        profile::save_rates(g316, Some(4000), &[]).unwrap();
+        let _fake = plug_in(&mut e);
+        read_back(&mut e);
+        assert!(notes().is_empty());
+        let fake = plug_in(&mut e);
+        pull(&mut e, &fake);
+        e.rate_pending.as_mut().unwrap().sent -= RATE_GIVE_UP + Duration::from_secs(1);
+        e.retry_at = Instant::now() + Duration::from_secs(60);
+        e.tick();
+        assert_eq!(notes(), ["Report rate not restored|4000 Hz: the keyboard did not come back within 20 s; Loginux keeps looking for it."]);
+        profile::set_active(None).unwrap();
+        let _ = fs::remove_file(profile::rates_path(g316));
+    }
+
     #[test]
     fn a_chosen_rate_is_set_again_when_the_keyboard_reconnects() {
         let _serial = crate::testenv::serial();
@@ -1374,7 +1510,7 @@ mod tests {
     }
 
     #[test]
-    fn a_kept_rate_is_not_sent_when_refused_and_stops_after_three_tries() {
+    fn a_kept_rate_is_not_sent_when_refused_and_stops_after_three_quick_drops() {
         let _serial = crate::testenv::serial();
         let g316 = layout::find("g316-x-98").unwrap();
         // A kept rate the keyboard refused before is not sent.
@@ -1388,29 +1524,32 @@ mod tests {
         fake.state().refuse_rate = Some((6, 2));
         e.link_up(kb).unwrap();
         assert_eq!((profile::load_kept_rate(g316), profile::load_refused_rates(g316)), (Some(8000), vec![8000]));
-        // A keyboard that keeps coming back at 1000 Hz gets the kept rate three times in ten minutes.
+        // A keyboard that drops off right after every send gets the kept rate three times.
         profile::save_rates(g316, Some(4000), &[]).unwrap();
         let mut e = engine();
-        for n in 0..4 {
-            let (kb, fake) = fake::keyboard("g316-x-98", fake::g316());
-            e.link = None;
-            e.link_up(kb).unwrap();
-            assert_eq!(rate_writes(&fake), usize::from(n < 3), "connection {n}");
+        for n in 0..3 {
+            let fake = plug_in(&mut e);
+            assert_eq!(rate_writes(&fake), 1, "connection {n}");
+            pull(&mut e, &fake);
         }
+        let fake = plug_in(&mut e);
+        assert_eq!(rate_writes(&fake), 0, "stopped after three quick drops");
         assert!(e.status().message.unwrap().starts_with("not restoring the report rate to 4000 Hz"));
         // Choosing a rate starts the count again.
         ok(e.handle(Request::SetReportRate { hz: 4000 }));
         e.rate_readback(Some(5));
-        let (kb, fake) = fake::keyboard("g316-x-98", fake::g316());
-        e.link = None;
-        e.link_up(kb).unwrap();
-        assert_eq!(rate_writes(&fake), 1);
+        pull(&mut e, &fake);
+        // Replugs after the rate held a minute do not count: it is sent every time.
+        for n in 0..5 {
+            let fake = plug_in(&mut e);
+            assert_eq!(rate_writes(&fake), 1, "replug {n}");
+            e.restored = e.restored.map(|t| t - RESTORE_SETTLE);
+            pull(&mut e, &fake);
+        }
         // A change to 8000 Hz the user asked for is lost in a reconnect: the older
         // kept 4000 Hz is not sent over it.
         e.rate_pending = pending(6, 8000, Instant::now());
-        let (kb, fake) = fake::keyboard("g316-x-98", fake::g316());
-        e.link = None;
-        e.link_up(kb).unwrap();
+        let fake = plug_in(&mut e);
         assert_eq!(rate_writes(&fake), 0);
         assert!(matches!(e.status().rate_change, Some(RateChange::Failed { hz: 8000, .. })));
         let _ = fs::remove_file(profile::rates_path(g316));

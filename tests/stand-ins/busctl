@@ -1,0 +1,7 @@
+#!/bin/sh
+# Stand-in for `busctl --user call ... Notify ...` in Loginux's tests
+# (src/testenv.rs): appends the notification's replaced ID, summary and body
+# to `notes` in $LOGINUX_TEST_SYSTEMD and answers with an ID, as busctl does.
+cd "${LOGINUX_TEST_SYSTEMD:?set by the tests}" || exit 1
+printf '%s|%s|%s\n' "$9" "${11}" "${12}" >> notes
+echo "u 7"
