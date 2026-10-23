@@ -1415,7 +1415,7 @@ impl App {
         label(ui, "ABOUT THESE SETTINGS", LABEL_PX, LABEL);
         ui.add_space(4.0);
         for text in [
-            "Loginux reads these from the keyboard each time it connects and every ten seconds after.",
+            "Loginux reads these from the keyboard each time it connects, every two seconds after, and at once when the keyboard reports a brightness change.",
             "Brightness and game mode are read only until their commands are verified on this keyboard.",
             "A report-rate change is sent when you confirm it, and Loginux reads the rate back, waiting for the keyboard if it reconnects. The keyboard forgets the rate when it reconnects, so Loginux sends the rate you chose again then, as G HUB does, and stops if the keyboard drops off right after three of those in ten minutes.",
             "For each change, Loginux switches the keyboard's profile management to host mode, as G HUB does, and back to onboard mode right after.",

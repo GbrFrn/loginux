@@ -35,7 +35,9 @@ const TICK: Duration = Duration::from_millis(250);
 const CHECK_EVERY: Duration = Duration::from_secs(2);
 const LEASE: Duration = Duration::from_secs(10);
 const SETTLE: Duration = Duration::from_millis(50);
-const CONTROLS_EVERY: Duration = Duration::from_secs(10);
+/// Brightness, report rate and game mode are read this often, and at once when the
+/// keyboard reports a brightness change made on it.
+const CONTROLS_EVERY: Duration = Duration::from_secs(2);
 /// A rate change that did not re-enumerate is read back after this long. On
 /// Windows the keyboard left the bus at the change itself (G HUB capture); the
 /// margin covers a slower drop, which has not been observed on Linux.
@@ -892,6 +894,7 @@ impl Engine {
             for event in link.kb.events() {
                 match event {
                     Event::GameMode(on) => link.controls.game_mode = Some(on),
+                    Event::Brightness => link.next_controls = now, // read below
                 }
             }
             let readback_due = self.rate_pending.as_ref().is_some_and(|p| now - p.sent > RATE_READBACK);
@@ -1412,6 +1415,21 @@ mod tests {
         fake.unplug();
         e.tick();
         assert!(e.link.is_none());
+    }
+
+    #[test]
+    fn a_brightness_change_on_the_keyboard_shows_at_once() {
+        let _serial = crate::testenv::serial();
+        let (mut e, fake) = linked();
+        let brightness = |e: &Engine| e.status().controls.unwrap().brightness;
+        assert_eq!(brightness(&e), Some([100, 100]));
+        fake.state().brightness = 40; // turned down with the knob
+        e.step().unwrap();
+        assert_eq!(brightness(&e), Some([100, 100]), "not read again before it is due");
+        let index = fake::g316().features.iter().position(|&f| f == 0x8040).unwrap() as u8;
+        fake.notify(index, 0, &[0, 40]);
+        e.step().unwrap();
+        assert_eq!(brightness(&e), Some([40, 100]), "read on the keyboard's word");
     }
 
     /// What the stand-in busctl was asked to show so far, as `summary|body`.

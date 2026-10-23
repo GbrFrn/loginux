@@ -77,6 +77,12 @@ and a controlled visible result. A brightness of zero can keep a valid
 `0x8081/7` frame from appearing; the firmware check is described in
 [hidpp20-lighting.md](hidpp20-lighting.md).
 
+Solaar treats `0x8040` event 0 as a new brightness (two bytes, big-endian)
+and event 1 as the lighting switched on or off, after which it reads the
+brightness again (static). Loginux reads the brightness again on either.
+Whether the G316 sends them when its knob changes the brightness has not been
+observed; the two-second read covers a keyboard that does not.
+
 `0x4523/0` reports game-mode state. The keyboard's game-mode key changes that
 state without Loginux. Read it for status; do not infer a host toggle from
 the notification format. The existing Loginux engine discards unsolicited
@@ -95,8 +101,9 @@ distinct from a watched Linux result.
 
 - `loginux status` and the editor's DEVICE tab show brightness, game mode and
   the report rate when the keyboard reports them. Loginux resolves each
-  feature by ID on every connection, reads it then and every ten seconds,
-  and applies game-mode notifications as they arrive.
+  feature by ID on every connection, reads it then and every two seconds,
+  applies game-mode notifications as they arrive, and reads the brightness
+  again at once on any `0x8040` notification.
 - `loginux rate HZ`, or a confirmed choice in the DEVICE tab, sends
   `0x8061/3` once, between `0x8101/6 [05]` and `[03]` on a keyboard that has
   `0x8101`. A lost reply is treated as unknown, not failure: Loginux

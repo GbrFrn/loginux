@@ -55,6 +55,8 @@ pub struct State {
     /// Colours drawn by FrameEnd, accumulated.
     pub shown: BTreeMap<u8, Rgb>,
     pub frames: usize,
+    /// The 0x8040 brightness it reports; a test changes it as the knob would.
+    pub brightness: u16,
     pub rate: u8,
     /// A rate index the device refuses, and the HID++ error it answers with.
     pub refuse_rate: Option<(u8, u8)>,
@@ -165,7 +167,7 @@ pub fn transport(spec: Spec, device: u8) -> (Hidpp, Fake) {
     assert_eq!(r, 0, "socketpair");
     // SAFETY: both descriptors were just created and nothing else owns them.
     let (ours, theirs) = unsafe { (File::from(OwnedFd::from_raw_fd(fds[0])), File::from(OwnedFd::from_raw_fd(fds[1]))) };
-    let state = Arc::new(Mutex::new(State { rate: 3, ..State::default() }));
+    let state = Arc::new(Mutex::new(State { rate: 3, brightness: 100, ..State::default() }));
     let fake = Fake { state: state.clone(), io: theirs.try_clone().expect("second handle"), device };
     thread::spawn(move || serve(theirs, spec, state));
     (Hidpp::from_file(ours, device), fake)
@@ -340,7 +342,7 @@ fn answer(spec: &Spec, st: &mut State, feature: u16, function: u8, p: &[u8]) -> 
         (0x8070, 2) => Ok(vec![p[0], p[1], 0, p[1] + 1]),
         (0x4540, 0) => Ok(vec![0x01]),
         (0x8040, 0) => Ok(vec![0, 100, 5, 3]),
-        (0x8040, 1) => Ok(vec![0, 100]),
+        (0x8040, 1) => Ok(st.brightness.to_be_bytes().to_vec()),
         (0x8061, 1) => Ok(vec![0, 0x78]),
         (0x8061, 2) => Ok(vec![st.rate]),
         (0x8061, 3) => match st.refuse_rate {

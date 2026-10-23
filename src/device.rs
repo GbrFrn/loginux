@@ -98,6 +98,9 @@ struct Optional {
 /// Something the keyboard reported on its own, outside a request.
 pub enum Event {
     GameMode(bool),
+    /// 0x8040 reported a change made on the keyboard (its knob or keys): the
+    /// brightness, or the lighting turned on or off. Read it again.
+    Brightness,
 }
 
 const STATIC: u16 = 0x0001; // 0x8071 effect ID
@@ -476,12 +479,15 @@ impl Keyboard {
 
     /// Notifications that arrived since the last call, typed where they are known.
     pub fn events(&mut self) -> Vec<Event> {
-        let game = self.optional.game_mode;
+        let (game, brightness) = (self.optional.game_mode, self.optional.brightness);
         self.io
             .notifications()
             .into_iter()
-            .filter(|r| Some(r[2]) == game && r[3] >> 4 == 0)
-            .map(|r| Event::GameMode(r[4] != 0))
+            .filter_map(|r| match Some(r[2]) {
+                i if i == game && r[3] >> 4 == 0 => Some(Event::GameMode(r[4] != 0)),
+                i if i == brightness => Some(Event::Brightness),
+                _ => None,
+            })
             .collect()
     }
 
@@ -571,6 +577,17 @@ mod tests {
         kb.alive().unwrap();
         assert!(matches!(kb.events()[..], [Event::GameMode(true)]));
         assert!(kb.events().is_empty(), "each notification is handed out once");
+    }
+
+    #[test]
+    fn brightness_notifications_ask_for_a_new_read_and_others_are_dropped() {
+        let (mut kb, fake) = fake::keyboard("g316-x-98", fake::g316());
+        let brightness = kb.optional.brightness.unwrap();
+        fake.notify(brightness, 0, &[0, 50]); // the knob set 50
+        fake.notify(brightness, 1, &[0]); // the lighting went off
+        fake.notify(kb.optional.report_rate.unwrap(), 0, &[6]); // nothing Loginux follows
+        kb.alive().unwrap();
+        assert!(matches!(kb.events()[..], [Event::Brightness, Event::Brightness]));
     }
 
     #[test]

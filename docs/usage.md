@@ -160,7 +160,8 @@ with none of it refuses the profile: the G903 has no wave or ripple.
 
 The editor's DEVICE tab and `loginux status` show settings the keyboard
 reports, when it reports them. Loginux reads them on every connection and
-every ten seconds after.
+every two seconds after, and at once when the keyboard says its brightness
+changed, for example from its knob.
 
 | Setting | What Loginux does | Proof |
 | --- | --- | --- |
