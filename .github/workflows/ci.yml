@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: rustup component add clippy llvm-tools
+      - name: D-Bus for the tray test
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends dbus
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests and coverage
+        shell: bash
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tools/coverage.sh "$RUNNER_TEMP/coverage.json" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: ${{ runner.temp }}/coverage.json
+
+  # Only this job can write to the repository, and it builds nothing.
+  badge:
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage
+          path: ${{ runner.temp }}
+      - name: Publish the coverage badge
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch --depth=1 origin badges; then git switch -c badges FETCH_HEAD; else git switch --orphan badges; fi
+          cp "$RUNNER_TEMP/coverage.json" coverage.json
+          git add coverage.json
+          git diff --cached --quiet || { git commit -qm "Coverage for ${GITHUB_SHA::7}" && git push -q origin badges; }

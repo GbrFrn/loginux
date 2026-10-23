@@ -133,6 +133,40 @@ action with a reconnect and readback path; it must not be replayed automatically
 like RAM-only lighting. Record getter, setter, persistence and restoration
 evidence separately in `research/` before exposing a write.
 
+## Tests
+
+`cargo test` runs the unit tests in each source file and the tests of the
+binary in `tests/cli.rs`. Besides Rust they need `dbus-daemon` and
+`dbus-send` (the `dbus` package), and they leave the machine's own state
+alone:
+
+- Devices are simulated. `src/fake.rs` answers HID++ requests the way the
+  G316 X 98 and the G903 answered in their probes, and records every request.
+- The config folder, the runtime folder and sysfs are scratch copies in a
+  private folder under `$TMPDIR` (`src/testenv.rs`), removed when the tests
+  end, so tests never see your profiles, your running service or your
+  devices. The tray test starts its own session bus, and `systemctl` and the
+  editor are stand-in scripts in `tests/stand-ins`.
+- The editor runs without a window, and tests click its controls by their
+  accessibility labels.
+
+A simulated device repeats what the real one did once. It cannot show how the
+device handles a request nobody has seen it answer, so passing tests do not
+prove that a change works on the hardware. After changing what Loginux sends
+to a device, try it on the device and say what you watched in the pull
+request.
+
+### Coverage
+
+CI measures line coverage on every push and updates the badge in the README.
+To measure it yourself, run `rustup component add llvm-tools` once, then
+`tools/coverage.sh`. It counts the code in `src/` and leaves out the test
+code. Lines marked with lcov's `LCOV_EXCL` markers are left out as well, and
+the report says how many. Two places carry them: `ui::run`, which opens the
+real window, and one error arm each after `poll` and `flock`, for errors that
+a valid file descriptor never returns. Add a marker only for the same kind of
+reason, and write the reason next to it.
+
 ## Evidence
 
 Say what you observed on a keyboard and what you read in software, firmware

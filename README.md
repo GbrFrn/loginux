@@ -8,6 +8,8 @@
 
 <p align="center">
   <a href="https://github.com/GbrFrn/loginux/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/GbrFrn/loginux"></a>
+  <a href="https://github.com/GbrFrn/loginux/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/GbrFrn/loginux/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="CONTRIBUTING.md#tests"><img alt="Line coverage" src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/GbrFrn/loginux/badges/coverage.json"></a>
   <a href="#licence"><img alt="Licence: MIT OR Apache-2.0" src="https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue"></a>
   <img alt="Platform: Linux" src="https://img.shields.io/badge/platform-Linux-informational">
   <img alt="Written in Rust" src="https://img.shields.io/badge/written%20in-Rust-orange">

@@ -24,6 +24,7 @@ depends=(
   'wayland'
 )
 makedepends=('cargo' 'git')
+checkdepends=('dbus') # dbus-daemon for the tray test's private session bus
 provides=("$_pkgname")
 conflicts=("$_pkgname")
 install=loginux.install
