@@ -333,6 +333,10 @@ mod tests {
 
     #[test]
     fn activating_opens_one_editor_at_a_time() {
+        // It forks the stand-in editor. A child inherits every open descriptor until
+        // its exec, the engine-lock file's included, so a fork while another test
+        // releases that lock keeps it held a moment longer: run alone.
+        let _serial = crate::testenv::serial();
         let mut t = idle();
         t.activate(0, 0);
         let first = t.editor.as_ref().expect("the editor started").id();
