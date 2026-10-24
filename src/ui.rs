@@ -546,13 +546,13 @@ struct App {
 }
 
 impl App {
-    fn new(ctx: &egui::Context, model: &'static Model, device: Option<PathBuf>, hosted: Option<Hosted>) -> App {
+    fn new(ctx: &egui::Context, model: &'static Model, device: Option<PathBuf>) -> App {
         let link = Link::start(ctx.clone());
         let service = Arc::new(Mutex::new(Service::Unknown));
         let mut app = App {
             model,
             link,
-            hosted,
+            hosted: None,
             device,
             host_tried: None,
             service_start: None,
@@ -763,11 +763,12 @@ impl App {
             // An enabled service that is not running (quit from the tray, say) is
             // started once, which brings the tray back; only a disabled or missing
             // service, or one that failed to start, leaves the engine to this window.
+            // So does --device: the service drives the device config.toml names.
             if matches!(service, Service::Unknown | Service::Changing(_)) {
                 return; // systemd has not answered yet
             }
             self.host_tried = Some(Instant::now());
-            if service == Service::Enabled && self.service_start.is_none() {
+            if service == Service::Enabled && self.service_start.is_none() && self.device.is_none() {
                 self.service_start = Some(Instant::now());
                 self.systemctl(&["start"]);
                 return;
@@ -2324,13 +2325,7 @@ fn window_icon() -> egui::IconData {
 // LCOV_EXCL_START: opens the native window, which tests cannot; App holds everything it shows.
 pub fn run(device: Option<PathBuf>) -> Result<(), String> {
     engine::install_signal_handlers();
-    let hosted = match ipc::request(&Request::Status) {
-        Ok(_) => None,
-        Err(e) => {
-            eprintln!("loginux: {e}; starting an engine in this window");
-            Hosted::start(engine::Options { device: device.clone(), refresh: None })?
-        }
-    };
+    // With no engine answering, the window's upkeep starts the service or hosts one.
     // LOGINUX_UI_ZOOM scales the whole interface on top of the display's own scale.
     let zoom: Option<f32> = std::env::var("LOGINUX_UI_ZOOM").ok().and_then(|z| z.parse().ok()).filter(|z: &f32| (0.5..=4.0).contains(z));
     let options = eframe::NativeOptions {
@@ -2350,7 +2345,7 @@ pub fn run(device: Option<PathBuf>) -> Result<(), String> {
             if let Some(z) = zoom {
                 cc.egui_ctx.set_zoom_factor(z);
             }
-            Ok(Box::new(App::new(&cc.egui_ctx, layout::current(), device, hosted)))
+            Ok(Box::new(App::new(&cc.egui_ctx, layout::current(), device)))
         }),
     )
     .map_err(|e| e.to_string())
@@ -2461,7 +2456,7 @@ mod tests {
             let ctx = egui::Context::default();
             ctx.enable_accesskit();
             style(&ctx);
-            let app = App::new(&ctx, g316(), device.map(PathBuf::from), None);
+            let app = App::new(&ctx, g316(), device.map(PathBuf::from));
             let frame = eframe::Frame::_new_kittest();
             Window { ctx, app, frame, nodes: vec![], events: vec![], modifiers: Default::default(), close: false, commands: vec![] }
         }
@@ -3293,10 +3288,15 @@ mod tests {
         // An enabled service that is not running is started, once.
         let _ = std::fs::remove_file(systemd.join("log"));
         let state = ServiceState::set("enabled");
-        let mut w = Window::on(Some(NO_DEVICE));
+        let mut w = Window::on(None);
         let started = |_: &Window| std::fs::read_to_string(crate::testenv::systemd().join("log")).is_ok_and(|l| l.contains("start loginux.service"));
         w.until("the service is started", started);
         assert!(w.app.hosted.is_none());
+        drop(w);
+        // A device given by hand is the window's to drive: the service would take another.
+        let _ = std::fs::remove_file(systemd.join("log"));
+        let w = Window::hosting(Some(NO_DEVICE));
+        assert!(!started(&w), "the service is left alone");
         drop(w);
         drop(state);
 

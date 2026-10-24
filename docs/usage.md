@@ -55,9 +55,10 @@ display scale; `LOGINUX_UI_ZOOM=1.25 loginux` enlarges the window's contents
 beyond the display's own scale.
 
 The window never opens the keyboard itself. If no Loginux engine is running, it
-starts one inside the window, and that engine hands the lighting back when the
-window closes. To keep a profile after the window closes and at every login,
-turn on RUN AT LOGIN (it needs the service installed, see below).
+starts the service if it is enabled, or else runs an engine inside the window,
+which hands the lighting back when the window closes. To keep a profile after
+the window closes and at every login, turn on RUN AT LOGIN (it needs the
+service installed, see below).
 
 The channel check, under SETTINGS (OPEN CHANNEL CHECK), lights one zone at a
 time, white, with everything else dark. You click where the light appeared, or
@@ -72,8 +73,8 @@ While `loginux run` runs, Loginux shows a tray icon. It speaks the
 StatusNotifierItem protocol: KDE Plasma shows it, and GNOME does with the
 AppIndicator extension. The menu names the device and the profile in use,
 switches profiles (Onboard Lighting hands the lighting back), opens the editor
-(so does a left click), and Quit stops the service until the next login,
-handing the lighting back.
+(so does a left click), and Quit stops the service, handing the lighting
+back, until the next login or until you open the editor.
 
 ## Notifications
 

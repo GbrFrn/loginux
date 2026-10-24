@@ -15,10 +15,9 @@ notifications, and a native egui window for editing (chosen by GbrFrn,
 device, and the window, the tray and the command line talk to it over a local
 socket; with no engine running, `status`, `apply`, `paint`, `effect`,
 `release` and `rate` take its lock and open the device themselves, and
-`probe` reads the node it is given. A window that finds no engine when it
-opens runs one in its own process, which hands the lighting back when the
-window closes; if the engine stops while the window is open, the window
-starts the service if it is enabled, or else runs one itself.
+`probe` reads the node it is given. When no engine answers, the window starts
+the service if it is enabled, or else runs an engine in its own process,
+which hands the lighting back when the window closes.
 
 ## Users
 
