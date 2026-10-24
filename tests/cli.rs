@@ -166,16 +166,29 @@ fn a_claude_code_hook_never_fails_or_writes_to_stdout() {
     std::fs::create_dir_all(dir.join("run/loginux")).unwrap();
     let listener = std::os::unix::net::UnixListener::bind(dir.join("run/loginux/sock")).unwrap();
     let engine = std::thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        let mut line = String::new();
-        BufReader::new(&stream).read_line(&mut line).unwrap();
-        let status = r#"{"ok":{"device":{"state":"missing"},"control":{"state":"onboard"},"active":null,"message":null,"pid":1,"hosted":false}}"#;
-        (&stream).write_all(format!("{status}\n").as_bytes()).unwrap();
-        line
+        let mut lines = vec![];
+        for _ in 0..2 {
+            let (stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(&stream).read_line(&mut line).unwrap();
+            let status = r#"{"ok":{"device":{"state":"missing"},"control":{"state":"onboard"},"active":null,"message":null,"pid":1,"hosted":false}}"#;
+            (&stream).write_all(format!("{status}\n").as_bytes()).unwrap();
+            lines.push(line);
+        }
+        lines
     });
     let out = hook(dir, "cli", prompt);
     assert!(out.status.success() && out.stdout.is_empty() && out.stderr.is_empty(), "{out:?}");
-    assert_eq!(engine.join().unwrap(), "{\"claude\":{\"session\":\"4242\",\"signal\":\"prompt\",\"pid\":4242}}\n");
+    // The end of a turn names the subagents still running in the background.
+    let stop = r#"{"session_id":"s1","hook_event_name":"Stop","background_tasks":[{"id":"a7","type":"subagent","status":"running"}]}"#;
+    assert!(hook(dir, "cli", stop).status.success());
+    assert_eq!(
+        engine.join().unwrap(),
+        [
+            "{\"claude\":{\"session\":\"4242\",\"signal\":\"prompt\",\"pid\":4242}}\n",
+            "{\"claude\":{\"session\":\"4242\",\"signal\":\"done\",\"pid\":4242,\"running\":[\"a7\"]}}\n",
+        ]
+    );
 }
 
 #[test]

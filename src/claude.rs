@@ -46,6 +46,7 @@ pub enum Signal {
     Start,
     /// The user sent a prompt.
     Prompt,
+    /// Thinking, or a subagent starting.
     Working,
     Tool,
     /// Claude Code compacts the conversation.
@@ -155,11 +156,22 @@ pub fn from_hook(json: &str, entrypoint: Option<&str>, pid: Option<u32>) -> Opti
         // /clear and /resume end one session and start the next in the same instance.
         ("SessionEnd", _) if matches!(text(&h.reason).as_str(), "clear" | "resume") => return None,
         ("SessionEnd", _) => Signal::End,
+        ("SubagentStart", _) if !agent.is_empty() => Signal::Working,
         ("SubagentStop", _) if !agent.is_empty() => Signal::End, // never the whole instance
         _ => return None,
     };
     let instance = pid.map_or_else(|| text(&h.session_id), |p| p.to_string());
     Some((if agent.is_empty() { instance } else { format!("{instance}/{agent}") }, signal))
+}
+
+/// The subagents a hook's input lists as still running in the background.
+/// Claude Code 2.1.310 sends them with Stop as `background_tasks` of type
+/// "subagent", whose id is the agent ID its own hooks carry (read from its
+/// code, not documented).
+pub fn background_agents(json: &str) -> Vec<String> {
+    let v: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+    let tasks = v.get("background_tasks").and_then(|t| t.as_array()).into_iter().flatten();
+    tasks.filter(|t| t.get("type").and_then(|k| k.as_str()) == Some("subagent")).filter_map(|t| t.get("id")?.as_str().map(String::from)).collect()
 }
 
 /// One usage limit as Claude Code's status line reports it: the share used, 0
@@ -498,6 +510,8 @@ struct Agent {
     state: State,
     since: Instant,
     seen: Instant,
+    /// A subagent's key on the number row while it runs: 0 for 1 up to 9 for 0.
+    slot: Option<usize>,
 }
 
 /// One running Claude Code.
@@ -736,7 +750,9 @@ impl Default for Display {
 
 impl Display {
     /// Takes in one signal from an instance, or from a subagent in one.
-    pub fn signal(&mut self, key: &str, signal: Signal, pid: Option<u32>, now: Instant) {
+    /// `running` names the subagents Claude Code still runs in the background
+    /// when a turn ends.
+    pub fn signal(&mut self, key: &str, signal: Signal, pid: Option<u32>, running: &[String], now: Instant) {
         self.palette = palette();
         self.prune(now);
         let (name, agent) = key.split_once('/').unwrap_or((key, ""));
@@ -756,6 +772,8 @@ impl Display {
         }
         self.limited |= signal == Signal::Limit;
         let i = self.instance(at, name, pid, now);
+        let taken: Vec<usize> = self.instances.iter().flat_map(|i| &i.agents).filter_map(|a| a.slot).collect();
+        let free = (0..10).find(|s| !taken.contains(s));
         let inst = &mut self.instances[i];
         (inst.pid, inst.seen, inst.closing) = (pid.or(inst.pid), now, None);
         let before = inst.agents.iter().find(|a| a.id == agent).map(|a| a.state);
@@ -771,11 +789,19 @@ impl Display {
             Signal::Waiting => before.filter(|s| matches!(s, State::Idle | State::Error)).unwrap_or(State::Done),
             _ => State::Error,
         };
-        if agent.is_empty() && matches!(signal, Signal::Start | Signal::Prompt | Signal::Done | Signal::Waiting | Signal::Error) {
-            // A new session, a prompt or the end of a turn settles what the
-            // subagents were doing, such as a permission an Esc left unanswered;
-            // one that still runs comes back with its next event.
-            inst.agents.truncate(1);
+        if agent.is_empty() {
+            // Settles what the subagents were doing, such as a permission an Esc
+            // left unanswered; one that still runs comes back with its next event.
+            match signal {
+                // A new session, or Claude Code idle, which it never is with work
+                // in the background: no subagent runs.
+                Signal::Start | Signal::Waiting => inst.agents.truncate(1),
+                // The end of a turn: what Claude Code lists as running goes on.
+                Signal::Done => inst.agents.retain(|a| a.id.is_empty() || running.contains(&a.id)),
+                // A prompt answers, or abandons, a subagent's question.
+                Signal::Prompt => inst.agents.retain(|a| a.id.is_empty() || a.state != State::Asking),
+                _ => {}
+            }
         }
         if signal == Signal::Prompt {
             inst.input = now;
@@ -786,7 +812,11 @@ impl Display {
         match inst.agents.iter_mut().find(|a| a.id == agent) {
             Some(a) if a.state == state => a.seen = now,
             Some(a) => (a.state, a.since, a.seen) = (state, now, now),
-            None => inst.agents.push(Agent { id: agent.into(), state, since: now, seen: now }),
+            None => inst.agents.push(Agent { id: agent.into(), state, since: now, seen: now, slot: None }),
+        }
+        // A subagent takes the lowest free key on the number row, and keeps it while it runs.
+        if let Some(a) = inst.agents.iter_mut().find(|a| a.id == agent && !agent.is_empty() && a.slot.is_none()) {
+            a.slot = free;
         }
         let changed = before != Some(state);
         let away = now - inst.input >= AWAY;
@@ -805,7 +835,7 @@ impl Display {
     fn instance(&mut self, at: Option<usize>, name: &str, pid: Option<u32>, now: Instant) -> usize {
         at.unwrap_or_else(|| {
             self.play(Show::Spark, now);
-            let main = Agent { id: String::new(), state: State::Idle, since: now, seen: now };
+            let main = Agent { id: String::new(), state: State::Idle, since: now, seen: now, slot: None };
             let inst = Instance { key: name.into(), pid, agents: vec![main], input: now, seen: now, closing: None, context: None, gauged: false };
             self.instances.push(inst);
             self.instances.len() - 1
@@ -911,6 +941,15 @@ impl Display {
         }
     }
 
+    /// A subagent's key on the number row at frame `f`: blinking in its state's
+    /// colour, quickly while a tool runs or it waits for the user, dark between
+    /// blinks. None once it has been quiet long enough to read as idle.
+    fn agent_key(&self, a: &Agent, f: i64, now: Instant) -> Option<Rgb> {
+        let stale = matches!(a.state, State::Working | State::Tool | State::Compacting) && now - a.seen >= STALE;
+        let period = if matches!(a.state, State::Tool | State::Asking) { 6 } else { 12 };
+        (!stale).then(|| if f.rem_euclid(period) < period / 2 { self.colour(a.state) } else { [0; 3] })
+    }
+
     /// LED `i` of `w` in an instance's share of the bar, over the profile's
     /// colour for that segment.
     fn share(&self, inst: &Instance, i: usize, w: usize, backdrop: Rgb, now: Instant) -> Rgb {
@@ -951,6 +990,13 @@ impl Display {
         // the left, the week or the spend limit at the right.
         let f = self.step(now);
         let lamps = if n >= 4 && k > 0 { [self.lamp(&[0], f), self.lamp(&[1, 2], f)] } else { [None; 2] };
+        // Each running subagent blinks its key on the number row, 1 to 0.
+        let mut digits = [None; 10];
+        for a in shares.iter().filter(|i| i.closing.is_none()).flat_map(|i| &i.agents) {
+            if let Some(slot) = a.slot {
+                digits[slot] = self.agent_key(a, f, now);
+            }
+        }
         let mut out = vec![];
         for z in zones.iter().filter_map(|&id| model.zone(id)).filter(|z| z.kind != Kind::Unknown) {
             let [x, y, w, h] = z.rect;
@@ -958,6 +1004,7 @@ impl Display {
                 Some(e) => e.still((x + w / 2.0) / model.board[0]),
                 None => profile.colour(model, z.id).unwrap_or_default(),
             };
+            let digit = "1234567890".find(z.name.as_str()).filter(|_| z.name.len() == 1).and_then(|d| digits[d]);
             let colour = match (bar.iter().position(|&b| b == z.id), show) {
                 (Some(0), _) if lamps[0].is_some() => lamps[0].unwrap_or_default(),
                 (Some(j), _) if j == n - 1 && lamps[1].is_some() => lamps[1].unwrap_or_default(),
@@ -973,6 +1020,7 @@ impl Display {
                         (level, false) => mix(dimmed, show.ink(&self.palette), level),
                     }
                 }
+                (None, None) if digit.is_some() => digit.unwrap_or_default(),
                 _ => backdrop,
             };
             out.push((z.id, colour));
@@ -1096,6 +1144,12 @@ mod tests {
         let stop = r#"{"session_id":"s1","agent_id":"a7","hook_event_name":"SubagentStop"}"#;
         assert_eq!(hook(stop), Some(("s1/a7".into(), Signal::End)));
         assert_eq!(hook(r#"{"session_id":"s1","hook_event_name":"SubagentStop"}"#), None, "never ends the instance");
+        let start = r#"{"session_id":"s1","agent_id":"a7","agent_type":"Explore","hook_event_name":"SubagentStart"}"#;
+        assert_eq!(hook(start), Some(("s1/a7".into(), Signal::Working)), "a subagent starts");
+        assert_eq!(hook(r#"{"session_id":"s1","hook_event_name":"SubagentStart"}"#), None);
+        let tasks = r#"{"hook_event_name":"Stop","background_tasks":[{"id":"a7","type":"subagent","status":"running"},{"id":"b2","type":"shell"},{"type":"subagent"},{"id":3,"type":"subagent"}]}"#;
+        assert_eq!(background_agents(tasks), ["a7"], "subagents only, with an ID");
+        assert!(background_agents(r#"{"hook_event_name":"Stop"}"#).is_empty() && background_agents("not json").is_empty());
         let nulls = r#"{"session_id":"s1","agent_id":null,"hook_event_name":"Stop","notification_type":null}"#;
         assert_eq!(hook(nulls), Some(("s1".into(), Signal::Done)), "a null field reads as missing");
         for headless in ["sdk-cli", "sdk-ts", "sdk-py"] {
@@ -1120,9 +1174,9 @@ mod tests {
         let mut d = Display::default();
         let t = at(&d, 0);
         for i in 0..31 {
-            d.signal(&i.to_string(), Signal::Start, None, t);
+            d.signal(&i.to_string(), Signal::Start, None, &[], t);
         }
-        d.signal("0", Signal::Error, None, t);
+        d.signal("0", Signal::Error, None, &[], t);
         let frame = d.frame(g316(), &zones(g316()), &Profile::default(), at(&d, 100)).unwrap();
         let bar = |j: usize| frame.iter().find(|z| z.0 == g316().strips[0].zones[j]).unwrap().1;
         assert_eq!((bar(0), bar(1)), (Palette::default().error, scale(Palette::default().working, 0.25)), "the first instance, alone on LED 1");
@@ -1134,22 +1188,22 @@ mod tests {
         let _serial = crate::testenv::serial();
         let mut d = Display::default();
         let t = at(&d, 0);
-        d.signal("mine", Signal::Start, Some(std::process::id()), t);
-        d.signal("gone", Signal::Start, GONE, t);
-        d.signal("manual", Signal::Start, None, t);
+        d.signal("mine", Signal::Start, Some(std::process::id()), &[], t);
+        d.signal("gone", Signal::Start, GONE, &[], t);
+        d.signal("manual", Signal::Start, None, &[], t);
         d.prune(t);
         assert_eq!(d.states(t), [State::Idle, State::Idle], "a process that ended goes at once");
         let later = t + LEASE;
         assert_eq!(d.states(later), [State::Idle], "one without a process lapses after half an hour");
         // An ended instance closes its share, then leaves; a new session reopens it.
-        d.signal("mine", Signal::End, None, t);
+        d.signal("mine", Signal::End, None, &[], t);
         assert!(d.states(t).len() == 1 && d.instances[0].alive(t + CLOSE / 2));
-        d.signal("mine", Signal::Start, None, t);
+        d.signal("mine", Signal::Start, None, &[], t);
         assert_eq!(d.states(t).len(), 2);
-        d.signal("mine", Signal::End, None, t);
+        d.signal("mine", Signal::End, None, &[], t);
         d.prune(t + CLOSE);
         assert_eq!(d.instances.len(), 1);
-        d.signal("unknown", Signal::End, None, t); // nothing to end
+        d.signal("unknown", Signal::End, None, &[], t); // nothing to end
     }
 
     #[test]
@@ -1157,18 +1211,75 @@ mod tests {
         let _serial = crate::testenv::serial();
         let mut d = Display::default();
         let t = at(&d, 0);
-        d.signal("1", Signal::Prompt, None, t);
-        d.signal("1/a", Signal::Asking, None, t);
+        d.signal("1", Signal::Prompt, None, &[], t);
+        d.signal("1/a", Signal::Asking, None, &[], t);
         assert_eq!(d.states(t), [State::Asking], "a subagent waiting for the user");
-        d.signal("1", Signal::Done, None, t);
+        d.signal("1", Signal::Done, None, &[], t);
         assert_eq!((d.states(t), d.instances[0].agents.len()), (vec![State::Done], 1), "the turn's end settles it");
-        d.signal("1/b", Signal::Tool, None, t);
+        d.signal("1/b", Signal::Tool, None, &[], t);
         assert_eq!(d.states(t), [State::Done], "still running, below finished");
-        d.signal("1/b", Signal::End, None, t);
+        d.signal("1/b", Signal::End, None, &[], t);
         assert_eq!(d.instances[0].agents.len(), 1);
         // Thinking with no event for a quarter of an hour reads as idle: an Esc sends none.
-        d.signal("1", Signal::Compact, None, t);
+        d.signal("1", Signal::Compact, None, &[], t);
         assert_eq!((d.states(t + STALE - Duration::from_secs(1)), d.states(t + STALE)), (vec![State::Compacting], vec![State::Idle]));
+    }
+
+    #[test]
+    fn subagents_blink_their_keys_on_the_number_row() {
+        let _serial = crate::testenv::serial();
+        let _ = fs::remove_file(profile::config_dir().join("claude.toml"));
+        let (m, p) = (g316(), Palette::default());
+        let mut grey = Profile::default();
+        grey.bases.insert("keys".into(), [9; 3]);
+        // The number row at frame f: w working or a tool, a asking, . dark between blinks, - the profile.
+        let row = |d: &Display, f: i64| -> String {
+            let frame = d.frame(m, &zones(m), &grey, at(d, f)).unwrap();
+            let key = |c: char| frame.iter().find(|z| z.0 == m.named(&c.to_string()).unwrap().id).unwrap().1;
+            "1234567890".chars().map(|c| [('-', [9; 3]), ('.', [0; 3]), ('w', p.working), ('a', p.asking)].iter().find(|k| k.1 == key(c)).map_or('?', |k| k.0)).collect()
+        };
+        let mut d = Display::default();
+        let t = at(&d, 0);
+        d.signal("1", Signal::Prompt, None, &[], t);
+        for agent in ["1/a", "1/b", "1/c"] {
+            d.signal(agent, Signal::Working, None, &[], t); // SubagentStart
+        }
+        d.signal("1/b", Signal::Tool, None, &[], t);
+        d.show = None;
+        // Thinking blinks once a second, a tool twice.
+        assert_eq!([row(&d, 0), row(&d, 3), row(&d, 6), row(&d, 9)], ["www-------", "w.w-------", ".w.-------", "...-------"]);
+        // A key stays with its agent; the next agent takes the lowest free one.
+        d.signal("1/b", Signal::End, None, &[], t);
+        assert_eq!(row(&d, 0), "w-w-------");
+        d.signal("1/d", Signal::Working, None, &[], t);
+        d.signal("2/x", Signal::Working, None, &[], t); // another instance's subagent
+        d.show = None;
+        assert_eq!(row(&d, 0), "wwww------");
+        d.signal("1/c", Signal::Asking, None, &[], t);
+        assert_eq!([row(&d, 0), row(&d, 6)], ["wwaw------", "..a.------"], "waiting for the user: the quick blink");
+        // The turn ends with a and c running in the background: d is done.
+        d.signal("1", Signal::Done, None, &["a".into(), "c".into()], t);
+        assert_eq!(row(&d, 0), "w-aw------");
+        // A prompt answers c's question; idle, Claude Code runs nothing more.
+        d.signal("1", Signal::Prompt, None, &[], t);
+        assert_eq!(row(&d, 0), "w--w------");
+        d.signal("2", Signal::Waiting, None, &[], t);
+        assert_eq!(row(&d, 0), "w---------");
+        // Quiet for a quarter of an hour: no longer shown.
+        assert_eq!(row(&d, 12 + (STALE.as_secs_f64() / STEP) as i64), "----------");
+        d.signal("1", Signal::Start, None, &[], t);
+        assert_eq!(row(&d, 0), "----------", "a new session");
+        // Ten keys: an eleventh agent waits for one, and takes it with its next event.
+        for n in 0..11 {
+            d.signal(&format!("1/n{n}"), Signal::Working, None, &[], t);
+        }
+        assert_eq!((row(&d, 0), d.instances[0].agents[11].slot), ("wwwwwwwwww".into(), None));
+        d.signal("1/n4", Signal::End, None, &[], t);
+        d.signal("1/n10", Signal::Tool, None, &[], t);
+        assert_eq!((row(&d, 6), d.instances[0].agents[10].slot), ("....w.....".into(), Some(4)));
+        // A closing instance's subagents go with it.
+        d.signal("1", Signal::End, None, &[], t);
+        assert_eq!(row(&d, 0), "----------");
     }
 
     /// Which sprite plays.
@@ -1181,32 +1292,32 @@ mod tests {
         let _serial = crate::testenv::serial();
         let mut d = Display::default();
         let t = at(&d, 0);
-        d.signal("1", Signal::Start, None, t);
+        d.signal("1", Signal::Start, None, &[], t);
         assert_eq!(shown(&d), Some(Show::Spark));
         d.show = None;
-        d.signal("1", Signal::Start, None, t);
+        d.signal("1", Signal::Start, None, &[], t);
         assert_eq!(shown(&d), None, "a new session in a running instance: no spark");
         // Within half a minute of the prompt the user is still watching: the bar is enough.
-        d.signal("1", Signal::Prompt, None, t);
-        d.signal("1", Signal::Asking, None, t + AWAY / 2);
-        d.signal("1", Signal::Working, None, t + AWAY);
-        d.signal("1", Signal::Done, None, t + AWAY);
+        d.signal("1", Signal::Prompt, None, &[], t);
+        d.signal("1", Signal::Asking, None, &[], t + AWAY / 2);
+        d.signal("1", Signal::Working, None, &[], t + AWAY);
+        d.signal("1", Signal::Done, None, &[], t + AWAY);
         assert_eq!(shown(&d), None);
         // After a long turn they may have looked away.
-        d.signal("1", Signal::Prompt, None, t);
-        d.signal("1/x", Signal::Asking, None, t + AWAY);
+        d.signal("1", Signal::Prompt, None, &[], t);
+        d.signal("1/x", Signal::Asking, None, &[], t + AWAY);
         assert_eq!(shown(&d), Some(Show::Ask), "a subagent asks too");
         d.show = None;
-        d.signal("1/x", Signal::Working, None, t + AWAY * 2); // answered
-        d.signal("1/x", Signal::Done, None, t + AWAY * 3);
+        d.signal("1/x", Signal::Working, None, &[], t + AWAY * 2); // answered
+        d.signal("1/x", Signal::Done, None, &[], t + AWAY * 3);
         assert_eq!(shown(&d), None, "only the main agent's turn ends");
-        d.signal("1", Signal::Done, None, t + AWAY * 3);
+        d.signal("1", Signal::Done, None, &[], t + AWAY * 3);
         assert_eq!(shown(&d), Some(Show::Check));
         // An error always shows, unless another sprite started within ten seconds.
-        d.signal("1", Signal::Error, None, t + AWAY * 3 + COOLDOWN / 2);
+        d.signal("1", Signal::Error, None, &[], t + AWAY * 3 + COOLDOWN / 2);
         assert_eq!(shown(&d), Some(Show::Check));
-        d.signal("1", Signal::Prompt, None, t + AWAY * 4);
-        d.signal("1", Signal::Error, None, t + AWAY * 4);
+        d.signal("1", Signal::Prompt, None, &[], t + AWAY * 4);
+        d.signal("1", Signal::Error, None, &[], t + AWAY * 4);
         assert_eq!(shown(&d), Some(Show::Cross));
     }
 
@@ -1268,7 +1379,7 @@ mod tests {
         let mut d = Display::default();
         let mut p = Profile::default();
         p.bases.insert("keys".into(), [100, 100, 100]);
-        d.signal("1", Signal::Start, None, at(&d, 0));
+        d.signal("1", Signal::Start, None, &[], at(&d, 0));
         let esc = |f: i64| d.frame(g316(), &[38], &p, at(&d, f)).unwrap()[0].1;
         assert_eq!((esc(0), esc(1), esc(Show::Spark.length() - 1), esc(Show::Spark.length())), ([30; 3], [0; 3], [30; 3], [100; 3]));
     }
@@ -1283,11 +1394,11 @@ mod tests {
             frame.iter().find(|z| z.0 == m.named(name).unwrap().id).unwrap().1
         };
         let mut d = Display::default();
-        d.signal("1", Signal::Asking, None, at(&d, 0));
+        d.signal("1", Signal::Asking, None, &[], at(&d, 0));
         assert_eq!(colour(&d, "bar15", 0), p.asking, "the middle of the share");
-        d.signal("1", Signal::Compact, None, at(&d, 0));
+        d.signal("1", Signal::Compact, None, &[], at(&d, 0));
         assert_eq!(colour(&d, "bar1", 0), p.compacting);
-        d.signal("1", Signal::Done, None, at(&d, 0));
+        d.signal("1", Signal::Done, None, &[], at(&d, 0));
         assert_eq!(colour(&d, "bar1", 15), mix(p.done, [0xff; 3], 0.7), "the glint");
         d.show = Some((Show::Ask, at(&d, 100)));
         assert_eq!(colour(&d, "m", 105), p.asking, "the exclamation mark's dot");
@@ -1302,10 +1413,10 @@ mod tests {
         let _serial = crate::testenv::serial();
         let mut d = Display::default();
         assert_eq!(d.next_frame(at(&d, 0)), None, "nothing to show");
-        d.signal("1", Signal::Done, None, at(&d, 0));
+        d.signal("1", Signal::Done, None, &[], at(&d, 0));
         let wait = d.next_frame(at(&d, 0)).unwrap();
         assert!((wait.as_secs_f64() - STEP / 2.0).abs() < 1e-3, "to the next frame of the clock: {wait:?}");
-        d.signal("1", Signal::End, None, at(&d, 60));
+        d.signal("1", Signal::End, None, &[], at(&d, 60));
         assert!(d.next_frame(at(&d, 61)).is_some(), "closing");
         assert_eq!(d.next_frame(at(&d, 60) + CLOSE), None, "closed");
     }
@@ -1316,7 +1427,7 @@ mod tests {
         let _ = fs::remove_file(profile::config_dir().join("claude.toml"));
         let m = g316();
         let mut d = Display::default();
-        d.signal("1", Signal::Done, None, at(&d, 0));
+        d.signal("1", Signal::Done, None, &[], at(&d, 0));
         let wave = profile::load(m, "Wave").unwrap();
         let frame = d.frame(m, &zones(m), &wave, at(&d, 60)).unwrap();
         let colour = |name: &str| frame.iter().find(|z| z.0 == m.named(name).unwrap().id).unwrap().1;
@@ -1324,7 +1435,7 @@ mod tests {
         assert!(frame.iter().all(|z| m.zone(z.0).unwrap().kind != Kind::Unknown), "unknown zones stay out");
         // Closing: a white flash, then the share shrinks to its middle and the
         // profile takes the segments back from the ends.
-        d.signal("1", Signal::End, None, at(&d, 60));
+        d.signal("1", Signal::End, None, &[], at(&d, 60));
         let bar = |f: i64, name: &str| d.frame(m, &zones(m), &wave, at(&d, f)).map(|fr| fr.iter().find(|z| z.0 == m.named(name).unwrap().id).unwrap().1);
         let done = Palette::default().done;
         let still = |name: &str| {
@@ -1345,8 +1456,8 @@ mod tests {
         let m = layout::find("g903-hero").unwrap();
         assert_eq!(status_zones(m), [1]);
         let mut d = Display::default();
-        d.signal("1", Signal::Error, None, at(&d, 0));
-        d.signal("2", Signal::Done, None, at(&d, 0));
+        d.signal("1", Signal::Error, None, &[], at(&d, 0));
+        d.signal("2", Signal::Done, None, &[], at(&d, 0));
         assert_eq!(d.frame(m, &[0, 1], &Profile::default(), at(&d, 30)).unwrap(), [(1, Palette::default().error)]);
     }
 
@@ -1375,7 +1486,7 @@ mod tests {
             frame.iter().find(|z| z.0 == m.strips[0].zones[j]).unwrap().1
         };
         let usage = |context: f32, five: f32, week: f32| Usage { context: Some(context), limits: true, five_hour: Some(Window { used: five, resets_at: 0 }), seven_day: Some(Window { used: week, resets_at: 0 }), spend: None };
-        d.signal("1", Signal::Done, None, at(&d, 0));
+        d.signal("1", Signal::Done, None, &[], at(&d, 0));
         d.show = None;
         d.usage("1", usage(91.0, 10.0, 10.0), None, at(&d, 0));
         assert_eq!(shown(&d), Some(Show::Gauge(Dial::Context, 9, false)), "the context passed 90 %");
@@ -1404,9 +1515,9 @@ mod tests {
         assert_eq!((bar(&d, 0, 60), bar(&d, 29, 60)), (p.error, scale(p.done, 0.55)), "reached: red; the week reset, its end dim as done ends are");
         // A turn that ended on a limit: both lamps red until Claude works again.
         d.usage("1", usage(10.0, 20.0, 20.0), None, at(&d, 0));
-        d.signal("1", Signal::Limit, None, at(&d, 0));
+        d.signal("1", Signal::Limit, None, &[], at(&d, 0));
         assert_eq!((bar(&d, 0, 60), bar(&d, 29, 60), d.states(at(&d, 60))), (p.error, p.error, vec![State::Error]));
-        d.signal("1", Signal::Working, None, at(&d, 0));
+        d.signal("1", Signal::Working, None, &[], at(&d, 0));
         assert_ne!(bar(&d, 0, 60), p.error);
         // A window past its reset time no longer counts; the spend limit shares the right lamp.
         let gone = Usage { limits: true, spend: Some(Window { used: 90.0, resets_at: 1 }), ..Usage::default() };
@@ -1516,23 +1627,23 @@ mod tests {
         let _serial = crate::testenv::serial();
         let mut d = Display::default();
         let t = at(&d, 0);
-        d.signal("1", Signal::Prompt, None, t);
+        d.signal("1", Signal::Prompt, None, &[], t);
         d.show = None;
         // Esc, then Claude Code's notice a minute later: finished, but no check mark.
-        d.signal("1", Signal::Waiting, None, t + AWAY * 2);
+        d.signal("1", Signal::Waiting, None, &[], t + AWAY * 2);
         assert_eq!((d.states(t), shown(&d)), (vec![State::Done], None));
         // A turn that ended on a limit stays red through that notice, until Claude works.
-        d.signal("1", Signal::Prompt, None, t + AWAY * 2);
-        d.signal("1", Signal::Limit, None, t + AWAY * 2);
-        d.signal("1", Signal::Waiting, None, t + AWAY * 3);
+        d.signal("1", Signal::Prompt, None, &[], t + AWAY * 2);
+        d.signal("1", Signal::Limit, None, &[], t + AWAY * 2);
+        d.signal("1", Signal::Waiting, None, &[], t + AWAY * 3);
         assert_eq!((d.states(t), d.limited), (vec![State::Error], true));
-        d.signal("1", Signal::Tool, None, t + AWAY * 3);
+        d.signal("1", Signal::Tool, None, &[], t + AWAY * 3);
         assert!(!d.limited);
         // An error stays through it, and so does an instance with no turn yet.
-        d.signal("1", Signal::Error, None, t + AWAY * 3);
-        d.signal("1", Signal::Waiting, None, t + AWAY * 4);
-        d.signal("2", Signal::Start, None, t + AWAY * 4);
-        d.signal("2", Signal::Waiting, None, t + AWAY * 4);
+        d.signal("1", Signal::Error, None, &[], t + AWAY * 3);
+        d.signal("1", Signal::Waiting, None, &[], t + AWAY * 4);
+        d.signal("2", Signal::Start, None, &[], t + AWAY * 4);
+        d.signal("2", Signal::Waiting, None, &[], t + AWAY * 4);
         assert_eq!(d.states(t + AWAY * 4), vec![State::Error, State::Idle]);
     }
 
@@ -1541,7 +1652,7 @@ mod tests {
         let _serial = crate::testenv::serial();
         let mut d = Display::default();
         let t = at(&d, 0);
-        d.signal("1", Signal::Start, None, t);
+        d.signal("1", Signal::Start, None, &[], t);
         assert_eq!(shown(&d), Some(Show::Spark));
         let full = Usage { context: Some(92.0), ..Usage::default() };
         d.usage("1", full, None, t);
@@ -1566,7 +1677,7 @@ mod tests {
         let _ = fs::remove_file(profile::config_dir().join("claude.toml"));
         let (m, p) = (g316(), Palette::default());
         let mut d = Display::default();
-        d.signal("1", Signal::Done, None, at(&d, 0));
+        d.signal("1", Signal::Done, None, &[], at(&d, 0));
         let key = |d: &Display, name: &str, f: i64| {
             let frame = d.frame(m, &zones(m), &Profile::default(), at(d, f)).unwrap();
             frame.iter().find(|z| z.0 == m.named(name).unwrap().id).unwrap().1

@@ -521,9 +521,9 @@ impl Engine {
                 Ok(())
             }
             Request::SetReportRate { hz } => self.set_report_rate(hz, false),
-            Request::Claude { session, signal, pid } => {
+            Request::Claude { session, signal, pid, running } => {
                 // Drawn on the loop's next turn: a hook never waits for the keyboard.
-                self.claude.signal(&session, signal, pid, Instant::now());
+                self.claude.signal(&session, signal, pid, &running, Instant::now());
                 self.redraw = true;
                 return Reply::Ok(self.status());
             }
@@ -1733,7 +1733,7 @@ mod tests {
         let painted = statics(&fake);
         // A hook's signal is answered before anything is sent, then drawn at once.
         let me = Some(std::process::id());
-        let s = ok(e.handle(Request::Claude { session: "1".into(), signal: Signal::Prompt, pid: me }));
+        let s = ok(e.handle(Request::Claude { session: "1".into(), signal: Signal::Prompt, pid: me, running: vec![] }));
         assert_eq!((s.claude, fake.state().frames), (vec![State::Working], frames));
         assert_eq!(e.wait(), Duration::ZERO);
         e.tick();
@@ -1780,7 +1780,7 @@ mod tests {
         // With no profile chosen the keyboard keeps its own lighting.
         profile::set_claude(true).unwrap();
         ok(e.handle(Request::Use { profile: None }));
-        ok(e.handle(Request::Claude { session: "1".into(), signal: Signal::Asking, pid: me }));
+        ok(e.handle(Request::Claude { session: "1".into(), signal: Signal::Asking, pid: me, running: vec![] }));
         e.tick();
         assert_eq!((fake.state().sw, e.wait()), ((0, 0), TICK), "not taken for the status");
         e.shutdown();
@@ -1792,7 +1792,7 @@ mod tests {
     fn claude_signals_without_a_keyboard_wait_at_the_usual_pace() {
         let _serial = crate::testenv::serial();
         let mut e = engine();
-        ok(e.handle(Request::Claude { session: "s1".into(), signal: crate::claude::Signal::Tool, pid: None }));
+        ok(e.handle(Request::Claude { session: "s1".into(), signal: crate::claude::Signal::Tool, pid: None, running: vec![] }));
         assert_eq!(e.wait(), Duration::ZERO);
         e.tick();
         assert_eq!(e.wait(), TICK, "nothing to draw on");

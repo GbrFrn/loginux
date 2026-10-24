@@ -90,8 +90,8 @@ not get silently ignored.
 Lights that are not keys, such as a logo, go in a `lights` list with the same
 fields as `keys`, and a profile sets them in a `[lights]` table. Claude Code's
 status display draws on the strips, or on the lights of a device without one.
-Its sprites use the key grid, and its gauges use the keys named `1` to `0`,
-so give the number row those names.
+Its sprites use the key grid, and its gauges and subagents use the keys named
+`1` to `0`, so give the number row those names.
 
 ### Cluster devices
 

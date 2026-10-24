@@ -139,8 +139,15 @@ frames a second:
 
 A subagent counts as part of its instance, and the share shows whichever of
 them most wants you: waiting, then an error, finished, a tool, compacting and
-thinking. Your next prompt, or the end of the turn, settles what the subagents
-were doing; one still running comes back with its next event.
+thinking. Each running subagent, of any instance, also takes the lowest free
+key on the number row, from 1 to 0, and keeps it until it ends, blinking in
+its state's colour: once a second while it thinks, twice while it runs a tool
+or waits for you. When a turn ends, only the subagents Claude Code still runs
+in the background keep their keys, so a turn that finished with agents at
+work shows finished on the bar while their keys go on blinking. Your next
+prompt settles a question a subagent left open. A subagent quiet for 15
+minutes leaves the profile on its key until its next event, and an eleventh
+waits for a key to come free.
 
 The context and the usage limits show on the bar too:
 
@@ -170,7 +177,7 @@ No sprite starts within ten seconds of another. With no profile chosen,
 Loginux leaves the lighting to the keyboard and shows nothing, and an edit in
 the editor and the channel check show over the display. A device without a
 light bar, such as the G903, shows the first instance's state on its lights
-instead, with no end lamps or sprites.
+instead, with no end lamps, sprites or subagent keys.
 
 What Claude Code reports, and what Loginux makes of it:
 
@@ -180,12 +187,13 @@ What Claude Code reports, and what Loginux makes of it:
 | `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure`, `PostCompact` (automatic) | thinking |
 | `PreToolUse` | running a tool, or waiting for you for `AskUserQuestion` and `ExitPlanMode` |
 | `PermissionRequest`; `Notification` for a permission prompt or an MCP form | waiting for you |
-| `Stop` | finished |
-| `Notification` `idle_prompt`; `PostCompact` after `/compact` | finished, with no sprite; an error, or an instance with no turn yet, stays as it is |
+| `Stop` | finished; the subagents it lists in `background_tasks` keep their keys |
+| `Notification` `idle_prompt`; `PostCompact` after `/compact` | finished, with no sprite and no subagent keys; an error, or an instance with no turn yet, stays as it is |
 | `StopFailure` | stopped on an error; on a usage limit if its error is `rate_limit` |
 | `Notification` `quota_auto_resume_fired` | thinking: Claude Code resumed after a limit reset |
 | `PreCompact` | compacting |
-| `SubagentStop` | the subagent is done |
+| `SubagentStart` | a subagent takes a key on the number row |
+| `SubagentStop` | the subagent is done, and its key goes back to the profile |
 | `SessionEnd` | the instance closes (not for `/clear` and `/resume`, which go on in the same instance) |
 | The status line's `context_window` and `rate_limits` | the context walls, the end lamps and the gauges |
 
@@ -454,7 +462,8 @@ On 2026-10-24 the Claude Code status display ran on a G316 X 98 with events
 sent by hand: every state of an instance, three instances sharing the light
 bar, the sprites, the context walls, the limit lamps and the gauges, a turn
 stopped on a usage limit, and instances closing. The same day a Claude Code
-session drove it through the plugin and its status line.
+session drove it through the plugin and its status line, and the number-row
+keys of subagents ran from hook input sent by hand.
 [`research/`](../research/README.md) records the evidence and its labels.
 
 ## Credits

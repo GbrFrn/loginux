@@ -38,6 +38,9 @@ pub enum Request {
         signal: Signal,
         #[serde(default)]
         pid: Option<u32>,
+        /// The subagents still running in the background when a turn ended.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        running: Vec<String>,
     },
     /// What a Claude Code instance's status line reports: its context and the
     /// account's usage limits (`loginux claude --statusline`).
@@ -249,7 +252,7 @@ mod tests {
             Request::Check { zone: Some(38) },
             Request::TakeOver,
             Request::SetReportRate { hz: 8000 },
-            Request::Claude { session: "4242/a7".into(), signal: Signal::Asking, pid: Some(4242) },
+            Request::Claude { session: "4242/a7".into(), signal: Signal::Asking, pid: Some(4242), running: vec![] },
             Request::ClaudeUsage { session: "4242".into(), usage: Usage { context: Some(81.5), ..Usage::default() }, pid: Some(4242) },
         ] {
             let line = serde_json::to_string(&req).unwrap();

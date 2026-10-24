@@ -95,11 +95,13 @@ not, rather than presenting metadata as fact.
   only when an instance starts, when a long turn waits or ends, on an error,
   and when the context or a limit crosses a mark (GbrFrn, 2026-10-24: the
   light bar is the constant status indicator; animations on the keys rarer,
-  like pixel art; instances split the bar). Turning it on installs Loginux's
-  Claude Code plugin from this repository's marketplace and passes the user's
-  status line command through Loginux, both written to keep working if
-  Loginux is uninstalled; turning it off disables the plugin, leaving it
-  installed, and puts the command back. Nothing shows without a chosen profile.
+  like pixel art; instances split the bar). Each running subagent blinks one
+  key of the number row, 1 to 0 (GbrFrn, 2026-10-24: "1 number by agent,
+  blinking"). Turning it on installs Loginux's Claude Code plugin from this
+  repository's marketplace and passes the user's status line command through
+  Loginux, both written to keep working if Loginux is uninstalled; turning it
+  off disables the plugin, leaving it installed, and puts the command back.
+  Nothing shows without a chosen profile.
 - Out of scope for now: the dot screen. It is a separate phase.
 
 ## G316 controls

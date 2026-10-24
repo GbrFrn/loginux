@@ -1482,7 +1482,7 @@ impl App {
         ui.add_space(14.0);
         label(ui, "CLAUDE CODE", LABEL_PX, LABEL);
         ui.add_space(6.0);
-        body(ui, "Shows each running Claude Code on the light bar: what it is doing, its context filling up and your usage limits, with short sprites on the keys when a long turn needs you or ends.", TEXT2, 14.0);
+        body(ui, "Shows each running Claude Code on the light bar: what it is doing, its context filling up and your usage limits. Each of its subagents blinks a key of the number row, and short sprites play on the keys when a long turn needs you or ends.", TEXT2, 14.0);
         ui.add_space(10.0);
         let c = *self.claude.lock().expect("claude lock");
         if switch(ui, "SHOW ON THE LIGHT BAR", c.changing.unwrap_or(c.on), c.changing.is_none()).clicked() {
@@ -3415,9 +3415,9 @@ mod tests {
         // Claude Code's status takes the keyboard from the profile until its session ends.
         profile::set_claude(true).unwrap();
         *w.app.claude.lock().unwrap() = ClaudeLink::read();
-        ipc::request(&Request::Claude { session: "s1".into(), signal: crate::claude::Signal::Done, pid: None }).unwrap();
+        ipc::request(&Request::Claude { session: "s1".into(), signal: crate::claude::Signal::Done, pid: None, running: vec![] }).unwrap();
         w.until("the status is said", |w| w.has(CLAUDE_NOTE));
-        ipc::request(&Request::Claude { session: "s1".into(), signal: crate::claude::Signal::End, pid: None }).unwrap();
+        ipc::request(&Request::Claude { session: "s1".into(), signal: crate::claude::Signal::End, pid: None, running: vec![] }).unwrap();
         w.until("the profile again", |w| !w.has(CLAUDE_NOTE));
         profile::set_claude(false).unwrap();
         *w.app.claude.lock().unwrap() = ClaudeLink::read();

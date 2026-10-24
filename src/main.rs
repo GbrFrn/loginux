@@ -626,8 +626,9 @@ fn claude(args: &mut Vec<String>) -> Result<(), String> {
         let _ = std::io::stdin().read_to_string(&mut json);
         let entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT").ok();
         let pid = std::env::var("CLAUDE_PID").ok().and_then(|p| p.parse().ok());
+        let running = claude::background_agents(&json);
         if let Some((session, signal)) = claude::from_hook(&json, entrypoint.as_deref(), pid)
-            && let Err(e) = ipc::request_within(&Request::Claude { session, signal, pid }, HOOK_WAIT)
+            && let Err(e) = ipc::request_within(&Request::Claude { session, signal, pid, running }, HOOK_WAIT)
         {
             eprintln!("loginux: {e}");
         }
@@ -635,7 +636,7 @@ fn claude(args: &mut Vec<String>) -> Result<(), String> {
     }
     let [name] = args.as_slice() else { return Err("usage: loginux claude --hook | EVENT [--session ID]".into()) };
     let signal = claude::Signal::from_name(name)?;
-    ipc::request(&Request::Claude { session: session.unwrap_or_else(|| "manual".into()), signal, pid: None })?;
+    ipc::request(&Request::Claude { session: session.unwrap_or_else(|| "manual".into()), signal, pid: None, running: vec![] })?;
     Ok(())
 }
 
@@ -1105,10 +1106,11 @@ mod tests {
         run("claude asking --session s1").unwrap();
         match &engine.join().unwrap()[..] {
             [
-                Request::Claude { session: a, signal: claude::Signal::Done, pid: None },
-                Request::Claude { session: b, signal: claude::Signal::Asking, pid: None },
+                Request::Claude { session: a, signal: claude::Signal::Done, pid: None, running: ra },
+                Request::Claude { session: b, signal: claude::Signal::Asking, pid: None, running: rb },
             ] => {
                 assert_eq!((a.as_str(), b.as_str()), ("manual", "s1"));
+                assert!(ra.is_empty() && rb.is_empty(), "by hand, nothing runs in the background");
             }
             other => panic!("{other:?}"),
         }

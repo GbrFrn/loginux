@@ -31,8 +31,9 @@ device's RAM, so unplugging it always brings back the onboard lighting.
   one applied.
 - Desktop notifications when the profile or the report rate changes.
 - Optional: the light bar as a status line for Claude Code, one share per
-  running instance, with its context and your usage limits; a switch under
-  SETTINGS connects it ([Claude Code status](docs/usage.md#claude-code-status)).
+  running instance, with its context and your usage limits, and a blinking
+  number key for each running subagent; a switch under SETTINGS connects it
+  ([Claude Code status](docs/usage.md#claude-code-status)).
 - A new device is a data file, not code: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Performance
