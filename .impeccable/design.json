@@ -233,11 +233,11 @@
     "typographyMeta": {
       "title": {
         "displayName": "Title",
-        "purpose": "Open profile name and CHANNEL CHECK heading."
+        "purpose": "Open profile name, and the SETTINGS and CHANNEL CHECK headings."
       },
       "brand": {
         "displayName": "Brand",
-        "purpose": "G316 wordmark in the header."
+        "purpose": "LOGINUX wordmark at the header's left."
       },
       "hex": {
         "displayName": "Hex",
@@ -338,10 +338,10 @@
       "css": ".ds-btn-disabled { font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-weight: 700; font-size: 10px; padding: 9px 12px; border-radius: 0; cursor: pointer; } .ds-btn-disabled { background: transparent; color: #4A4A50; border: 2px solid transparent; cursor: default; }"
     },
     {
-      "name": "Login Switch",
+      "name": "Switch",
       "kind": "switch",
-      "refersTo": "switch",
-      "description": "RUN AT LOGIN at the header's right: a fixed label and a square switch. On is a red track with the knob at the right; off a grey edged track with the knob at the left. While systemctl runs, the knob shows the side asked for in Disabled grey and the switch takes no clicks.",
+      "refersTo": "switch-on",
+      "description": "RUN AT LOGIN in the header and SHOW ON THE LIGHT BAR on SETTINGS: a fixed label and a square switch. On is a red track with the knob at the right; off a grey edged track with the knob at the left. While a change runs, the knob shows the side asked for in Disabled grey and the switch takes no clicks.",
       "html": "<button class=\"ds-switch\" role=\"switch\" aria-checked=\"true\"><span>RUN AT LOGIN</span><span class=\"ds-switch-track\"><span class=\"ds-switch-knob\"></span></span></button>",
       "css": ".ds-switch { display: inline-flex; align-items: center; gap: 10px; padding: 8px; background: transparent; border: none; cursor: pointer; font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-weight: 700; font-size: 10px; color: #A9A9AE; } .ds-switch-track { position: relative; width: 32px; height: 16px; box-sizing: border-box; border: 2px solid #A9A9AE; border-radius: 0; } .ds-switch-knob { position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; background: #A9A9AE; } .ds-switch:hover { color: #EDEDED; } .ds-switch:hover .ds-switch-track { background: #1F1F23; border-color: #EDEDED; } .ds-switch:hover .ds-switch-knob { background: #EDEDED; } .ds-switch[aria-checked=\"true\"] { color: #EDEDED; } .ds-switch[aria-checked=\"true\"] .ds-switch-track { background: #FF2E3F; border-color: transparent; } .ds-switch[aria-checked=\"true\"]:hover .ds-switch-track { background: #FF5765; } .ds-switch[aria-checked=\"true\"] .ds-switch-knob { left: auto; right: 2px; background: #0B0B0C; } .ds-switch:disabled { color: #4A4A50; cursor: default; } .ds-switch:disabled .ds-switch-track { background: transparent; border-color: #2A2A2E; } .ds-switch:disabled .ds-switch-knob { background: #4A4A50; } .ds-switch:focus-visible { outline: 2px solid #FF2E3F; outline-offset: -5px; }"
     },
@@ -382,7 +382,7 @@
       "kind": "custom",
       "refersTo": "key-unpainted",
       "description": "Keys on the black board: Dark Key when unpainted, exact RGB when painted, red outline when selected, 3pt proof mark in the channel check.",
-      "html": "<div class=\"ds-board\"><div class=\"ds-key\">ESC</div><div class=\"ds-key ds-key-lit\" style=\"background:#38D07A\">W<i class=\"ds-proof\"></i></div><div class=\"ds-key ds-key-lit ds-key-sel\" style=\"background:#5B6CFF\">F1</div></div>",
+      "html": "<div class=\"ds-board\"><div class=\"ds-key\">ESC<i class=\"ds-proof\"></i></div><div class=\"ds-key ds-key-lit\" style=\"background:#38D07A\">W</div><div class=\"ds-key ds-key-lit ds-key-sel\" style=\"background:#5B6CFF\">F1</div></div>",
       "css": ".ds-board { display: inline-flex; gap: 4px; padding: 10px; background: #000000; outline: 2px solid #2A2A2E; outline-offset: 8px; } .ds-key { position: relative; width: 38px; height: 38px; background: #1A1A1D; color: #A9A9AE; font-family: Silkscreen, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; -webkit-font-smoothing: none; image-rendering: pixelated; font-size: 7px; padding: 4px; box-sizing: border-box; border-radius: 0; } .ds-key:hover { box-shadow: inset 0 0 0 1px #EDEDED; } .ds-key-lit { color: #0B0B0C; } .ds-key-sel { outline: 2px solid #FF2E3F; } .ds-proof { position: absolute; right: 3px; bottom: 3px; width: 3px; height: 3px; background: #3FD07A; }"
     },
     {
@@ -451,7 +451,7 @@
       "Do draw every bitmap word with `px_text` at one of the seven sizes (cells of 1, 1.5, 2, 4 or 6pt) and snap every shape with `snap()`, `line()`, `fill()` and `outline()`.",
       "Do keep feathering off and keep the +0.01 rounding bias in `whole()`.",
       "Do show LED colour as a flat fill of the exact RGB the keyboard receives.",
-      "Do reserve Signal Red for selection, the active tab, focus, the login switch when on and each context's primary action; Observed Green for connected and observed; Caution Amber for warnings and differing proof.",
+      "Do reserve Signal Red for selection, the active tab, focus, the switches when on and each context's primary action; Observed Green for connected and observed; Caution Amber for warnings and differing proof.",
       "Do render disabled controls as Disabled-grey text with no edge.",
       "Do keep proof states distinct: observed, differs, and unmarked layout data.",
       "Do fall back from full label to `short` legend to no legend on keys."

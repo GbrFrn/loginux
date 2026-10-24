@@ -65,8 +65,8 @@ Usage:
 Options:
   --device /dev/hidrawN           use this node; it must be a known device's HID++ interface
 
-Profiles are ~/.config/loginux/profiles/NAME.toml. Nothing is written to the keyboard's
-flash, and unplugging the keyboard always restores its onboard lighting.
+Profiles are ~/.config/loginux/profiles/NAME.toml. Lighting goes to the keyboard's RAM
+only, and unplugging the keyboard always restores its onboard lighting.
 ";
 
 /// How long `loginux rate` waits for the engine to confirm a change, and for a

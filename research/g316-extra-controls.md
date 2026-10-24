@@ -1,9 +1,10 @@
 # G316 controls beyond per-key RGB
 
 These findings apply to the external G316 X 98 (`046d:c36b`, HID++ USB
-interface 2) running application firmware `U186.01.B0007`. **Live** means a
-Linux device query or the owner's Windows G HUB capture; **static** means the
-cached firmware, vendor software or public source code such as Solaar. A
+interface 2) running application firmware `U186.01.B0007`. **Live** means
+sent to or read from the keyboard, or watched on it, on Linux or in the
+owner's Windows G HUB capture; **static** means the cached firmware, vendor
+software or public source code such as Solaar. A
 Windows write is evidence that the keyboard accepts the command, not proof
 that Loginux has exercised it.
 
@@ -16,7 +17,7 @@ indices in the capture are only identifiers for that firmware session.
 | Control | Evidence | Safe next use | Still unknown |
 | --- | --- | --- | --- |
 | Lighting brightness `0x8040` | **Live:** feature index 15; function 0 returned `00 64 05 03` (maximum 100, then `05 03`, which Solaar reads as 5 steps and capability flags `03`, static); function 1 returned `00 64` (current value 100). | Read and show the current value and reported maximum. | The G316 setter's request and persistence have not been established. Do not send a brightness write based on the getter layout. |
-| Report rate `0x8061` | **Live:** index 6; functions 0 and 1 reported bitmap `0x0078`; function 2 returned index 3 at 1000 Hz. Function 3 is refused with error 2 while `0x8101` profile management (index 16) is in the mode the keyboard starts in, and accepted after `0x8101/6 [05]`; Loginux set 2000, 4000 and 8000 Hz this way and read each back (2026-10-23). **Live, Windows:** on every attach G HUB reads 1000 Hz, sends `0x8101/6 [05]`, then writes its rate. **Static:** Solaar sends `0x8101/6 [05]` when it claims a device and `[03]` when it releases it. | Change the rate on an explicit request, and send that rate again when the keyboard connects at another one, as G HUB does: `[05]` and the rate write as in the capture, then `[03]` as Solaar does on release. | What `0x8101/6` controls beyond the rate; Solaar's comment calls `[05]` disabling firmware power management. Why the keyboard re-enumerates on its own (once at 2000 Hz and eight times at 8000 Hz on 2026-10-23; once its HID++ interface did not bind, usbhid error -71, until a replug). Why it kept 8000 Hz through every reconnect after 10:02 that day. |
+| Report rate `0x8061` | **Live:** index 6; functions 0 and 1 reported bitmap `0x0078`; function 2 returned index 3 at 1000 Hz. Function 3 is refused with error 2 while `0x8101` profile management (index 16) is in the mode the keyboard starts in, and accepted after `0x8101/6 [05]`; Loginux set 2000, 4000 and 8000 Hz this way and read each back (2026-10-23). **Live, Windows:** on every attach G HUB reads 1000 Hz, sends `0x8101/6 [05]`, then writes its rate. **Static:** Solaar sends `0x8101/6 [05]` when it claims a device and `[03]` when it releases it. | Change the rate on an explicit request, and send that rate again when the keyboard connects at another one, as G HUB does: `[05]` and the rate write as in the capture, then `[03]` as Solaar does on release. | What `0x8101/6` controls beyond the rate; Solaar's comment calls `[05]` disabling firmware power management. Why the keyboard re-enumerates on its own (once at 2000 Hz and eight times at 8000 Hz on 2026-10-23, and nine more times between 23:06 that day and 03:24 the next with 8000 Hz kept; once its HID++ interface did not bind, usbhid error -71, until a replug). Why it kept 8000 Hz through every reconnect after 10:02 that day. |
 | Game mode `0x4523` | **Live:** index 13; function 0 returned `00` while off; pressing the dedicated key produced `01` and `00` notifications. | Show current on/off state; update it on notifications or by re-reading after reconnect. | No G316 host toggle or per-key disable sequence has been validated. |
 | Knob and mute press | **Live:** interface 1 sends standard HID Consumer Control usages `0x00e9` (volume up) and `0x00ea` (volume down); pressing the knob mutes. | Document that Linux's HID input and sound stack already receive these events. | Knob mode changes and host remapping are separate work; Loginux has no reason to open the key-report interface for lighting. |
 | Consecutive-zone RGB `0x8081/5` | **Live, Windows:** G HUB sent up to three `(first zone, last zone, R, G, B)` records per long report and followed them with `0x8081/7` FrameEnd. The Esc-red capture included range `0x26–0x26`. | Optional transport optimization for runs of equal colours, after preserving `0x8081/1` as the proven Linux path. | Loginux has not used function 5 on Linux; it gives no new visible capability. |
@@ -59,6 +60,17 @@ a replug at 11:26 and eight re-enumerations of its own between 11:01 and
 capture each attach reported 1000 Hz, and G HUB wrote its chosen rate again;
 Loginux does the same with the rate the user chose, as described below.
 Loginux sends nothing meant to save a rate on the keyboard.
+
+The keyboard went on re-enumerating with 8000 Hz kept (live, 2026-10-23 and
+2026-10-24). Between 23:06 and 03:24 the kernel logged nine disconnects, each
+followed by a new device 0.29 to 0.37 s later; the keyboard was behind a USB
+2.0 hub (`05e3:0608`). The first eight came while the service ran Loginux
+0.1.6, which has no Claude Code display: each time the engine logged
+`No such device (os error 19)`, reconnected, took the lighting again and
+logged no rate restore. The ninth, at 03:24:07, came while Loginux 0.1.7 drew
+Claude Code's compacting pattern on the light bar during a demo. The engine
+logged `Protocol error (os error 71)`, the HID++ interface bound again, and
+the engine reconnected and took the lighting again. Cause not established.
 
 Rate selection is an explicit user action, and a rate is not part of a lighting
 profile. The first plan ruled out any automatic rate write at startup, login or

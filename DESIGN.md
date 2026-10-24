@@ -172,8 +172,8 @@ Rejected outright: the RGB-suite default of a charcoal window with a product ren
 Near-black greys for structure, LED colour for content, and three signals that never trade roles.
 
 ### Primary
-- **Signal Red** (signal-red): selection (key outlines and the drag marquee), the active tab underline, the primary action, the RUN AT LOGIN switch's track when on, keyboard focus rings, the text cursor and text-selection tint (at 45 percent). On a primary button the label is Ground-coloured.
-- **Signal Red, Hot** (signal-red-hot): hover on the primary button and on the RUN AT LOGIN switch's track when on.
+- **Signal Red** (signal-red): selection (key outlines and the drag marquee), the active tab underline, the primary action, a switch's track when on (RUN AT LOGIN, SHOW ON THE LIGHT BAR), keyboard focus rings, the text cursor and text-selection tint (at 45 percent). On a primary button the label is Ground-coloured.
+- **Signal Red, Hot** (signal-red-hot): hover on the primary button and on a switch's track when on.
 
 ### Secondary
 - **Observed Green** (observed-green): the connected status square and the proof mark for a zone whose observed position matched; "as expected" answers, a completed check count, and a report rate read back after a change.
@@ -232,8 +232,8 @@ A fixed three-column instrument under a header. The window opens at 1360 x 840pt
 
 - **Header:** 64pt tall on Ground, closed by a 2pt Text-coloured rule. Wordmark 22pt from the left; tabs 36pt after it, 34pt apart, hit areas padded 8pt; the RUN AT LOGIN switch 22pt from the right; the dot patch (192 x 30pt) sits 22pt left of it and drops out when the tabs need the room.
 - **Left column:** 236pt wide with 16pt margins on Ground: profiles in 48pt ruled boxes, then a rule and the connection status block pinned to the bottom.
-- **Centre column:** Ground with 24pt margins, scrolling vertically. EDIT: title, meta line, the LIGHTING row, then the board at the column's width (at most 1200pt, key unit at most 60pt), then selection and research controls and the hover line. SETTINGS: title, the DEVICE group with one row per setting, a rule, then the CHANNEL CHECK group. CHANNEL CHECK: title with BACK TO SETTINGS at the right; before a run, the method, one CHECK button per run with its answered count, the proof key and the board; during a run, the zone number, the board and the answers.
-- **Right column:** 316pt wide with 16pt margins on Panel. EDIT: the specimen of the selection (label, hex, swatch at three sizes), picker, value rows, colour list, then save and use actions; for an effect profile, the effect's settings take the place of the specimen, picker and colour list. SETTINGS: ABOUT THESE SETTINGS, notes on how Loginux reads and writes them. CHANNEL CHECK: the answers of the chosen run, with CLEAR THESE ANSWERS at the foot.
+- **Centre column:** Ground with 24pt margins, scrolling vertically. EDIT: title, meta line, the LIGHTING row, then the board at the column's width (at most 1200pt, key unit at most 60pt), then selection and research controls and the hover line. SETTINGS: title, the DEVICE group with one row per setting, a rule, the CHANNEL CHECK group, a rule, then the CLAUDE CODE group: a line of prose, the SHOW ON THE LIGHT BAR switch, and a Label Grey note under it saying whether Claude Code's plugin and status line reach Loginux, or that a change is under way. CHANNEL CHECK: title with BACK TO SETTINGS at the right; before a run, the method, one CHECK button per run with its answered count, the proof key and the board; during a run, the zone number, the board and the answers.
+- **Right column:** 316pt wide with 16pt margins on Panel. EDIT: the specimen of the selection (label, hex, swatch at three sizes), picker, value rows, colour list, then save and use actions; for an effect profile, the effect's settings take the place of the specimen, picker and colour list. SETTINGS: ABOUT THESE SETTINGS, notes on how Loginux reads and writes the device settings and on what the Claude Code switch changes in Claude Code. CHANNEL CHECK: the answers of the chosen run, with CLEAR THESE ANSWERS at the foot.
 - **Column rules:** 2pt Rule-coloured verticals at both column edges, drawn on top of the panels.
 - **Rhythm:** item spacing 8pt by default (7pt in the status block); added gaps step through 2, 4, 6, 8, 10, 12, 14 and 18pt; in EDIT the LIGHTING row gets 18pt before and 12pt after, and the board 14pt after.
 
@@ -264,11 +264,11 @@ Bitmap caps in a snapped rectangle, sized to the label plus 24 x 18pt.
 - **Disabled:** Disabled text, no edge, no fill, no click sense.
 
 ### Switch
-The login service's one setting, at the header's right: the label RUN AT LOGIN in Label caps, never changing, then 10pt on a 32 x 16pt square track holding an 8pt knob (the same 8pt square that marks connection and IN USE) inset 4pt. Label and track are one control with an 8pt padded hit area.
+Two switches share one look: RUN AT LOGIN, the login service's one setting, at the header's right, and SHOW ON THE LIGHT BAR in the CLAUDE CODE group on SETTINGS. Each is its label in Label caps, never changing, then 10pt on a 32 x 16pt square track holding an 8pt knob (the same 8pt square that marks connection and IN USE) inset 4pt. Label and track are one control; the header switch pads its hit area by 8pt, and the SETTINGS switch takes its drawn size in the page flow.
 - **On:** Signal Red track, Ground knob at the right, Text label; hover Signal Red Hot.
 - **Off:** transparent track with a 2pt Secondary Text edge, the knob at the left and the label in Secondary Text; hover Raised fill with Text edge, knob and label.
-- **Changing:** while systemctl runs, the knob sits on the side asked for, everything in Disabled grey with a Rule edge, and the switch takes no clicks, so a second click cannot undo the first.
-- **Unknown:** before systemd answers, the same grey with the knob centred. Without the service file the label reads SERVICE NOT INSTALLED in Disabled grey and no track is drawn.
+- **Changing:** while systemctl runs, or while Loginux connects or disconnects Claude Code, the knob sits on the side asked for, everything in Disabled grey with a Rule edge, and the switch takes no clicks, so a second click cannot undo the first.
+- **Unknown:** RUN AT LOGIN only: before systemd answers, the same grey with the knob centred. Without the service file the label reads SERVICE NOT INSTALLED in Disabled grey and no track is drawn.
 - **Focus:** a 2pt Signal Red outline 3pt outside label and track; Space or Enter flips it.
 
 ### Tabs
@@ -285,7 +285,7 @@ Full-width 48pt boxes with a 2pt Rule edge and 10pt inset. The name sits in Smal
 - **Stepper:** a 56pt centred field between quiet FASTER and SLOWER buttons, for an effect's seconds per cycle. The buttons step through 1, 1.5, 2, 3, 4, 5, 6, 8, 10, 12, 15 and 20 seconds and grey out at the ends; clicking the field selects its value, and a typed value (comma or point) applies on Enter or when the field loses focus.
 
 ### Specimen Column
-The selection shown as a type specimen: a Label line naming the selection (up to five names, else a zone count), the hex in Hex caps, then the colour as three flat swatches of full width x 72pt, half width x 34pt and one-fifth width x 14pt, split evenly when several colours are selected. With nothing selected, a 72pt dot-matrix patch and one line of instruction take the swatch's place.
+The selection shown as a type specimen: a Label line naming the selection (up to five names, else a zone count), the hex in Hex caps, then the colour as three flat swatches of full width x 72pt, half width x 34pt and one-fifth width x 14pt, split evenly when several colours are selected. With nothing selected, the hex reads NONE in Label Grey, and a 72pt dot-matrix patch and one line of instruction take the place of the swatches and the picker.
 
 ### Keyboard Board (signature)
 The board on a black body with 10pt padding, framed by a 2pt Rule outline set 8pt outside. Keys are inset by a snapped gap of a tenth of a unit (at least 2pt); strip segments touch, separated by a 1pt gap. Unpainted zones are Dark Key with Secondary Text legends; painted zones show the exact RGB, with a Ground or Text legend picked by luminance. Selection is a 2pt Signal Red outline just outside the key; hover is a 1pt Text outline; the drag marquee is a 1pt red rectangle. In the channel check and on an effect profile's board, every zone is Dark Key and nothing can be selected. In the channel check, proof marks are 3pt squares, green for observed and amber for differs, explained by the proof key above the board before a run starts (unmarked means layout data only). The editing board shows colour only.
@@ -302,7 +302,7 @@ A keycap with penguin eyes and beak, lit along its bottom edge: a 16 x 16 pixel 
 - **Do** draw every bitmap word with `px_text` at one of the seven sizes (cells of 1, 1.5, 2, 4 or 6pt) and snap every shape with `snap()`, `line()`, `fill()` and `outline()`.
 - **Do** keep feathering off and keep the +0.01 rounding bias in `whole()`.
 - **Do** show LED colour as a flat fill of the exact RGB the keyboard receives.
-- **Do** reserve Signal Red for selection, the active tab, focus, the login switch when on and each context's primary action; Observed Green for connected and observed; Caution Amber for warnings and differing proof.
+- **Do** reserve Signal Red for selection, the active tab, focus, the switches when on and each context's primary action; Observed Green for connected and observed; Caution Amber for warnings and differing proof.
 - **Do** render disabled controls as Disabled-grey text with no edge.
 - **Do** keep proof states distinct: observed, differs, and unmarked layout data.
 - **Do** fall back from full label to `short` legend to no legend on keys.

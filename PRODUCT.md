@@ -11,11 +11,14 @@ desktop (Linux, native window)
 Rust. One binary, `loginux`: a command line, a background engine run by a
 systemd user service, which also shows a tray icon and sends desktop
 notifications, and a native egui window for editing (chosen by GbrFrn,
-2026-10-22, over a local web page or a webview). The engine is the only part
-that opens the device; the window, the tray and the command line talk to it
-over a local socket. When no engine answers, the window starts the service if
-it is enabled, or else runs an engine in its own process, which hands the
-lighting back when the window closes.
+2026-10-22, over a local web page or a webview). The engine opens the
+device, and the window, the tray and the command line talk to it over a local
+socket; with no engine running, `status`, `apply`, `paint`, `effect`,
+`release` and `rate` take its lock and open the device themselves, and
+`probe` reads the node it is given. A window that finds no engine when it
+opens runs one in its own process, which hands the lighting back when the
+window closes; if the engine stops while the window is open, the window
+starts the service if it is enabled, or else runs one itself.
 
 ## Users
 
@@ -80,7 +83,10 @@ not, rather than presenting metadata as fact.
   after replug, live edits without flicker, a channel check of all 133 zones
   (2026-10-22); report-rate changes to 2000, 4000 and 8000 Hz, each read
   back, and the kept rate sent again and read back after a replug
-  (2026-10-23). Brightness and game mode have only been read.
+  (2026-10-23); the Claude Code display from events sent by hand, every
+  state, sprite, context wall, limit lamp and gauge, and from a Claude Code
+  session through the plugin (2026-10-24). Brightness and game mode have only
+  been read.
 - Optional, and off until the editor's switch (or `loginux claude --enable`)
   turns it on: the light bar as a status line for Claude Code, one share per
   running instance, with its context and the account's usage limits, drawn by

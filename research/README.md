@@ -47,9 +47,12 @@ quote.
 
 ## Ground rules
 
-- Write to RAM only. Never send anything that saves to flash, updates
-  firmware, resets the device or unlocks engineering features. The list of
-  requests to avoid is in [hidpp20-lighting.md](hidpp20-lighting.md).
+- Write lighting to RAM only. Never send anything that saves to flash,
+  updates firmware, resets the device or unlocks engineering features. A
+  device setting can outlast a replug, as the G316's report rate has; write
+  one only at the user's request (see
+  [g316-extra-controls.md](g316-extra-controls.md)). The list of requests to
+  avoid is in [hidpp20-lighting.md](hidpp20-lighting.md).
 - Record a device's state before changing it, and restore it.
 - Don't publish firmware images, decompiled code or vendor files. Describe
   behaviour in your own words and say which version you looked at.

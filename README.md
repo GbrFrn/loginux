@@ -38,12 +38,14 @@ device's RAM, so unplugging it always brings back the onboard lighting.
 ## Performance
 
 One 17 MB binary is the command line, the background service, the tray icon
-and the editor. Measured with v0.1.4 on an Intel Core i7-12700H laptop
-(CachyOS, kernel 7.2), with a G316 X 98 reporting at 8000 Hz:
+and the editor. Measured on an Intel Core i7-12700H laptop (CachyOS, kernel
+7.2), with a G316 X 98 reporting at 8000 Hz, with v0.1.4 unless a row says
+otherwise:
 
 | What | Measured |
 | --- | --- |
 | Service, idle | 0.05 % of one core |
+| Service, showing a Claude Code instance that runs a tool (v0.1.7) | 0.2 % of one core |
 | Service, memory | 6 MB at its peak by systemd's count, under 3 MB of it its own |
 | Service start to lighting applied | 140 ms, finding the keyboard included |
 | `loginux status` | 1.1 ms (median of 50), starting the process included |
@@ -81,6 +83,8 @@ sudo pacman -U loginux-git-*.pkg.tar.zst            # the downloaded package
 systemctl --user enable --now loginux.service    # keeps a profile applied, shows the tray icon
 ```
 
+After an upgrade, restart the service with `systemctl --user restart loginux.service`.
+
 Elsewhere, build it with `cargo install --path .` and add the udev rule:
 [install from source](docs/usage.md#install-from-source).
 
@@ -91,13 +95,15 @@ Open **Loginux** from the application menu, or run `loginux`.
 ![Choosing a built-in effect in the editor](docs/screenshots/effects.png)
 
 ```sh
-loginux use Wave     # keep a profile applied
-loginux release      # hand the lighting back and stop keeping a profile
-loginux status       # device, profile and settings
+loginux use Wave          # keep a profile applied
+loginux release           # hand the lighting back and stop keeping a profile
+loginux status            # device, profile and settings
+loginux claude --enable   # show Claude Code's status on the light bar
 ```
 
 [docs/usage.md](docs/usage.md) covers the editor, the command line, the profile
-format, effects, the service and how Loginux talks to a device.
+format, effects, the service, the Claude Code status display and how Loginux
+talks to a device.
 
 ## Contributing
 

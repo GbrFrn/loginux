@@ -87,6 +87,12 @@ Every zone ID may appear only once, and 255 is not allowed (it means "skip"
 on the wire). A definition with an unknown field is rejected, so a typo does
 not get silently ignored.
 
+Lights that are not keys, such as a logo, go in a `lights` list with the same
+fields as `keys`, and a profile sets them in a `[lights]` table. Claude Code's
+status display draws on the strips, or on the lights of a device without one.
+Its sprites use the key grid, and its gauges use the keys named `1` to `0`,
+so give the number row those names.
+
 ### Cluster devices
 
 A device without `0x8081` sets `lighting = "clusters"` and lists one light per
@@ -94,7 +100,8 @@ A device without `0x8081` sets `lighting = "clusters"` and lists one light per
 `0x8071 cluster N` lines, and Loginux paints each light with that cluster's
 Static effect. Such a definition has no `unknown` and no `[[strip]]`. For such
 a device the probe prints a starting definition with one light per lighting
-cluster, named `light0`, `light1` and so on in a row; rename and place them.
+cluster, named after its index (`light1` for cluster 1) and set in a row;
+rename and place them.
 
 ```toml
 lighting = "clusters"
@@ -105,8 +112,9 @@ lights = [
 
 When the sixth byte of a cluster's probe line is not `00`, the cluster is a
 status display, like the DPI LEDs of a G903. Its firmware decides which LEDs
-are on, and it can stay dark while Loginux holds the lighting. Say so in the
-file's comments; [research/g903.md](research/g903.md) has the evidence.
+are on, and it can stay dark while Loginux holds the lighting. The probe
+leaves such a cluster out and says why in a comment; keep the comment.
+[research/g903.md](research/g903.md) has the evidence.
 
 ## Adding a protocol
 
@@ -140,6 +148,28 @@ so that a device which drops off after every write cannot loop (`RESTORES` in
 `src/engine.rs`). Record getter, setter, persistence and restoration evidence
 separately in `research/` before exposing a write.
 
+## The Claude Code plugin
+
+`packaging/claude-code` is the Claude Code plugin behind the status display
+([docs/usage.md](docs/usage.md#claude-code-status)), and
+`.claude-plugin/marketplace.json` publishes it from this repository. Each hook
+in `hooks/hooks.json` runs `loginux claude --hook` with the event as JSON on
+stdin. That is the `loginux` on Claude Code's `PATH`, not the build in your
+checkout, and the hook does nothing when there is none. A hook must exit 0 and
+print nothing on stdout, which Claude Code reads into the conversation for
+some events; `tests/cli.rs` checks this. `from_hook` in `src/claude.rs` turns
+the events into signals, so an event added to one needs a line in the other.
+The status line is not part of the plugin: `loginux claude --enable` writes
+it into Claude Code's own settings.
+
+Users install the plugin from GitHub (`GbrFrn/loginux`), so a change reaches
+them from main. Claude Code keeps an installed plugin under its version, so
+raise `version` in `plugin.json`, which is separate from Loginux's version,
+with every change to the plugin. CI does not check the plugin: run
+`claude plugin validate --strict packaging/claude-code` and
+`claude plugin validate --strict .`, and try a change with
+`claude --plugin-dir packaging/claude-code`.
+
 ## Tests
 
 `cargo test` runs the unit tests in each source file and the tests of the
@@ -149,11 +179,13 @@ alone:
 
 - Devices are simulated. `src/fake.rs` answers HID++ requests the way the
   G316 X 98 and the G903 answered in their probes, and records every request.
-- The config folder, the runtime folder and sysfs are scratch copies in a
-  private folder under `$TMPDIR` (`src/testenv.rs`), removed when the tests
-  end, so tests never see your profiles, your running service or your
-  devices. The tray test starts its own session bus, and `systemctl`, `busctl`
-  and the editor are stand-in scripts in `tests/stand-ins`.
+- The config folder, the runtime folder, sysfs and Claude Code's settings
+  folder (`CLAUDE_CONFIG_DIR`) are scratch copies in a private folder under
+  `$TMPDIR` (`src/testenv.rs`), removed when the tests end, so tests never
+  see your profiles, your running service, your devices or your Claude Code
+  settings. The tray test starts its own session bus, and `systemctl`,
+  `busctl`, `claude` and the editor are stand-in scripts in
+  `tests/stand-ins`.
 - The editor runs without a window, and tests click its controls by their
   accessibility labels.
 
@@ -162,6 +194,9 @@ device handles a request nobody has seen it answer, so passing tests do not
 prove that a change works on the hardware. After changing what Loginux sends
 to a device, try it on the device and say what you watched in the pull
 request.
+
+CI also runs `cargo clippy --all-targets -- -D warnings`, so a Clippy warning
+fails a pull request; run it before you push.
 
 ### Coverage
 

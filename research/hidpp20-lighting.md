@@ -1,11 +1,11 @@
 # Logitech HID++ 2.0 lighting
 
 How Loginux drives Logitech lighting, written for anyone working on another
-Logitech device. Labels: **live** means sent to or read from a device;
-**static** means read from firmware, vendor software or public source code;
-**inference** means reasoning that no observation backs yet. Unless a line
-names another device, the live observations come from a G316 X 98
-([g316-x-98.md](g316-x-98.md)).
+Logitech device. Labels: **live** means sent to or read from a device, or
+watched on it; **static** means read from firmware, vendor software or public
+source code; **inference** means reasoning that no observation backs yet.
+Unless a line names another device, the live observations come from a
+G316 X 98 ([g316-x-98.md](g316-x-98.md)).
 
 ## Transport
 
