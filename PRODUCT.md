@@ -90,7 +90,7 @@ not, rather than presenting metadata as fact.
   turns it on: the light bar as a status line for Claude Code, one share per
   running instance, with its context and the account's usage limits, drawn by
   the engine as per-key frames (no other requests). The keys keep the chosen
-  profile, an effect paused on a still frame, and show a short pixel sprite
+  profile (an effect pauses on a still frame) and show a short pixel sprite
   only when an instance starts, when a long turn waits or ends, on an error,
   and when the context or a limit crosses a mark (GbrFrn, 2026-10-24: the
   light bar is the constant status indicator; animations on the keys rarer,

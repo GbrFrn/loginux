@@ -4,9 +4,9 @@ These findings apply to the external G316 X 98 (`046d:c36b`, HID++ USB
 interface 2) running application firmware `U186.01.B0007`. **Live** means
 sent to or read from the keyboard, or watched on it, on Linux or in the
 owner's Windows G HUB capture; **static** means the cached firmware, vendor
-software or public source code such as Solaar. A
-Windows write is evidence that the keyboard accepts the command, not proof
-that Loginux has exercised it.
+software or public source code such as Solaar. A Windows write is evidence
+that the keyboard accepts the command, not proof that Loginux has
+exercised it.
 
 Loginux implements `0x8071` and `0x8081` lighting, a `0x4540` layout read,
 and the brightness, report-rate and game-mode rows below as separate,
@@ -97,9 +97,9 @@ and a controlled visible result. A brightness of zero can keep a valid
 Solaar treats `0x8040` event 0 as a new brightness (two bytes, big-endian)
 and event 1 as the lighting switched on or off; after "on" it reads the
 brightness again, and after "off" it shows 0 (static). Loginux reads the
-brightness again on either.
-Whether the G316 sends them when its knob changes the brightness has not been
-observed; the two-second read covers a keyboard that does not.
+brightness again on either. Whether the G316 sends them when its knob
+changes the brightness has not been observed; the two-second read covers a
+keyboard that does not.
 
 `0x4523/0` reports game-mode state. The keyboard's game-mode key changes that
 state without Loginux. Read it for status; do not infer a host toggle from

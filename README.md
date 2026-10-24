@@ -84,7 +84,8 @@ sudo pacman -U loginux-git-*.pkg.tar.zst            # the downloaded package
 systemctl --user enable --now loginux.service    # keeps a profile applied, shows the tray icon
 ```
 
-After an upgrade, restart the service with `systemctl --user restart loginux.service`.
+After an upgrade, restart the service with
+`systemctl --user restart loginux.service`.
 
 Elsewhere, build it with `cargo install --path .` and add the udev rule:
 [install from source](docs/usage.md#install-from-source).

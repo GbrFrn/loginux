@@ -202,9 +202,9 @@ Runs without a person at the terminal, `claude -p` and the Agent SDK, are left
 out. An interrupt (Esc) sends no event, so a share keeps its state until the
 next one, such as Claude Code's notice a minute later that it is waiting for
 input; thinking, a tool or compacting with no event for 15 minutes shows as
-idle. Claude Code tells the
-hook which process it runs in through `CLAUDE_PID`; without it, an instance
-is its session and drops off after 30 minutes without an event.
+idle. Claude Code tells the hook which process it runs in through
+`CLAUDE_PID`; without it, an instance is its session and drops off after 30
+minutes without an event.
 
 A hook writes nothing to standard output, which Claude Code would read, and
 always exits successfully. The engine answers it before drawing, and a hook
@@ -232,8 +232,8 @@ error = "#ff0000"        # errors, and limits from 95 %
 `loginux claude EVENT` sets the display by hand, for an instance named
 `manual` unless `--session` names another. EVENT is `start`, `prompt`,
 `working`, `tool`, `compact`, `asking`, `done`, `waiting`, `error`, `limit`
-or `end`, which closes the instance. `loginux status` lists each instance's state, in
-their order on the bar.
+or `end`, which closes the instance. `loginux status` lists each instance's
+state, in their order on the bar.
 
 ## Command line
 
@@ -252,11 +252,11 @@ their order on the bar.
 | `loginux claude --enable` or `--disable` | Connects Claude Code to the light bar, or disconnects it: [Claude Code status](#claude-code-status) |
 | `loginux claude --hook`, `--statusline` or `EVENT` | What Claude Code's hooks and status line run, or a state set by hand |
 
-`--device /dev/hidrawN` picks the node by hand; Loginux checks that it really
-is the HID++ interface of a known device before sending anything, except
-`probe`, which sends only getters and takes any USB hidraw node. `apply`,
-`paint` and `effect` refuse to run while an engine owns the keyboard, and they
-check every name and colour before the first write.
+`--device /dev/hidrawN` picks the node by hand; Loginux checks that it is the
+HID++ interface of a known device before sending anything, except `probe`,
+which sends only getters and takes any USB hidraw node. `apply`, `paint` and
+`effect` refuse to run while an engine owns the keyboard, and they check every
+name and colour before the first write.
 
 ## Profiles
 
@@ -331,8 +331,9 @@ fails is not tried again. If the keyboard does not return or reports another
 rate, the editor and the command line say so. On a keyboard with profile
 management (`0x8101`), Loginux switches it to host mode for the write and back
 to onboard mode right after, the switch Solaar makes when it claims and
-releases a device; G HUB makes the same host switch before its rate writes. The
-keyboard can come back at its own rate after a reconnect (1000 Hz on the
+releases a device; G HUB makes the same host switch before its rate writes.
+
+The keyboard can come back at its own rate after a reconnect (1000 Hz on the
 G316 X 98), though it has kept 8000 Hz through most reconnects so far. So,
 like G HUB, Loginux keeps the rate you chose and sends it again when the
 keyboard connects at another rate, never a rate the keyboard refused. If the
