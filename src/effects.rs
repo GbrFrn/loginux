@@ -132,6 +132,25 @@ impl Effect {
         out
     }
 
+    /// A still frame of the effect at `x`, 0 at the board's left edge to 1 at its
+    /// right, for when the device cannot run it: the colour of the coloured
+    /// effects, Ripple dim as between key presses, and the rainbow of Cycle and
+    /// Wave across the board.
+    pub fn still(&self, x: f32) -> Rgb {
+        match self.kind {
+            Kind::Static | Kind::Breathe => self.color,
+            Kind::Ripple => self.color.map(|v| v / 4),
+            Kind::Cycle | Kind::Wave => {
+                let hue = x.rem_euclid(1.0) * 6.0;
+                let channel = |n: f32| {
+                    let k = (n + hue) % 6.0;
+                    (255.0 * (1.0 - k.min(4.0 - k).clamp(0.0, 1.0))).round() as u8
+                };
+                [channel(5.0), channel(3.0), channel(1.0)]
+            }
+        }
+    }
+
     pub fn direction_name(&self) -> &'static str {
         DIRECTIONS.iter().find(|d| d.1 == self.direction).map_or("right", |d| d.0)
     }
@@ -270,6 +289,15 @@ mod tests {
         assert!(wave.ends_with("direction = \"down\"\n") && !wave.contains("color"), "{wave}");
         let odd = Effect { direction: 4, ..Effect::new(Kind::Wave) };
         assert_eq!(odd.direction_name(), "right", "an unnamed direction prints as the default");
+    }
+
+    #[test]
+    fn still_frames_stand_in_for_running_effects() {
+        let red = Effect::parse("breathe,color=ff0000").unwrap();
+        assert_eq!((red.still(0.3), Effect::parse("ripple,color=ff0000").unwrap().still(0.3)), ([255, 0, 0], [63, 0, 0]));
+        let wave = Effect::parse("wave").unwrap();
+        assert_eq!([wave.still(0.0), wave.still(1.0 / 3.0), wave.still(2.0 / 3.0)], [[255, 0, 0], [0, 255, 0], [0, 0, 255]], "a rainbow across the board");
+        assert_eq!(Effect::new(Kind::Cycle).still(0.5), [0, 255, 255]);
     }
 
     #[test]

@@ -1,0 +1,12 @@
+{
+  "name": "loginux",
+  "owner": { "name": "GbrFrn" },
+  "description": "Claude Code plugins for Loginux, per-key RGB lighting for Logitech keyboards on Linux",
+  "plugins": [
+    {
+      "name": "loginux-status",
+      "source": "./packaging/claude-code",
+      "description": "Claude Code's status on the light bar of a keyboard that Loginux drives"
+    }
+  ]
+}

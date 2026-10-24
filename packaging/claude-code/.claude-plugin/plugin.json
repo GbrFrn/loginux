@@ -1,0 +1,11 @@
+{
+  "name": "loginux-status",
+  "displayName": "Loginux status",
+  "version": "0.1.0",
+  "description": "Shows Claude Code's status on the light bar of a keyboard that Loginux drives: thinking, running a tool, waiting for you, done",
+  "author": { "name": "GbrFrn" },
+  "homepage": "https://github.com/GbrFrn/loginux/blob/main/docs/usage.md#claude-code-status",
+  "repository": "https://github.com/GbrFrn/loginux",
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["lighting", "keyboard", "status"]
+}

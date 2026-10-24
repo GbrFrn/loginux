@@ -3,9 +3,9 @@
 //! of the device definitions and of sysfs calls it first in a test build, so no
 //! test reads or writes the real ~/.config/loginux or sees the machine's own
 //! devices. The session bus address points into the scratch folder as well,
-//! where nothing listens unless a test starts its own bus, and `systemctl` and
-//! `busctl` are stand-in scripts (tests/stand-ins) that never reach systemd or
-//! the desktop.
+//! where nothing listens unless a test starts its own bus, and `systemctl`,
+//! `busctl` and `claude` are stand-in scripts (tests/stand-ins) that never reach
+//! systemd, the desktop or Claude Code, whose settings folder is scratch too.
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
@@ -44,6 +44,8 @@ pub fn init() -> &'static Path {
         std::fs::create_dir_all(root.join("systemd")).expect("the stand-in systemctl's folder");
         crate::ui::use_systemctl(stand_in_program("systemctl"));
         crate::notify::use_busctl(stand_in_program("busctl"));
+        crate::claude::use_claude(stand_in_program("claude"));
+        std::fs::create_dir_all(root.join("claude-cli")).expect("the stand-in claude's folder");
         // SAFETY: this runs once, inside call_once, before any test reads these
         // variables: every test that reaches them calls init() first and waits here.
         unsafe {
@@ -51,6 +53,8 @@ pub fn init() -> &'static Path {
             std::env::set_var("XDG_RUNTIME_DIR", root.join("run"));
             std::env::set_var("DBUS_SESSION_BUS_ADDRESS", format!("unix:path={}", root.join("run/bus").display()));
             std::env::set_var("LOGINUX_TEST_SYSTEMD", root.join("systemd"));
+            std::env::set_var("LOGINUX_TEST_CLAUDE", root.join("claude-cli"));
+            std::env::set_var("CLAUDE_CONFIG_DIR", root.join("claude"));
             libc::atexit(remove_scratch_folder);
         }
         ROOT.set(root).expect("set once");
@@ -193,4 +197,9 @@ pub fn default_signals() {
 pub fn serial() -> MutexGuard<'static, ()> {
     init();
     SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The stand-in claude's folder: its `log`, and a `fails` file that makes it fail.
+pub fn claude_cli() -> PathBuf {
+    init().join("claude-cli")
 }

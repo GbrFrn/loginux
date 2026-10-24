@@ -1,5 +1,6 @@
 //! loginux: RGB lighting for Logitech HID++ keyboards and mice on Linux.
 
+mod claude;
 mod device;
 mod effects;
 mod engine;
@@ -22,6 +23,7 @@ use engine::{STOP, TakeError};
 use ipc::{Control, Controls, Device, RateChange, Request, Status};
 use layout::{Kind, Model};
 use profile::{Profile, hex, parse_rgb};
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,6 +49,16 @@ Usage:
   loginux effect CLUSTER=EFFECT[,param=value]... [--hold SECS | --keep]
                                      run a built-in effect (static, cycle, breathe, wave, ripple)
                                      on a lighting cluster, by number or light name
+  loginux claude --hook              show Claude Code's status on the light bar (its hooks run this)
+  loginux claude --enable | --disable
+                                     connect Claude Code to the light bar, or disconnect it: its
+                                     plugin and its status line (what the editor's switch does)
+  loginux claude --statusline [-- COMMAND...]
+                                     Claude Code's status line: the context and usage limits for
+                                     the light bar, then COMMAND, the status line it had
+  loginux claude EVENT [--session ID]
+                                     the same by hand: start, prompt, working, tool, compact,
+                                     asking, done, waiting, error, limit or end
   loginux probe --device /dev/hidrawN
                                   read-only: print a starting definition for a new device
 
@@ -96,6 +108,7 @@ fn cli(mut args: Vec<String>) -> Result<(), String> {
         "probe" => no_more(&args).and_then(|_| probe(device)),
         "rate" => rate(device, &args),
         "effect" => effect(device, &mut args),
+        "claude" => claude(&mut args),
         other => Err(format!("unknown command {other:?}\n\n{USAGE}")),
     }
 }
@@ -194,6 +207,10 @@ fn describe(status: &Status) -> String {
         Some(RateChange::Waiting { hz }) => out += &format!("report-rate change: waiting for the keyboard to confirm {hz} Hz\n"),
         Some(RateChange::Failed { hz, error }) => out += &format!("report-rate change to {hz} Hz failed: {error}\n"),
         Some(RateChange::Done { .. }) | None => {}
+    }
+    if !status.claude.is_empty() {
+        let states: Vec<String> = status.claude.iter().map(|s| format!("{s:?}").to_lowercase()).collect();
+        out += &format!("claude code: {}\n", states.join(", "));
     }
     if let Some(m) = &status.message {
         out += &format!("last message: {m}\n");
@@ -571,6 +588,84 @@ fn rate(device: Option<PathBuf>, args: &[String]) -> Result<(), String> {
     Err(format!("the keyboard did not come back within {} s; replug it, then run `loginux rate`", RECONNECT.as_secs()))
 }
 
+/// How long a hook waits for the engine; Claude Code waits for the hook.
+const HOOK_WAIT: Duration = Duration::from_secs(1);
+
+/// `loginux claude --hook`, which Claude Code's hooks run with the event as JSON
+/// on stdin, or `loginux claude EVENT [--session ID]` by hand. A hook never
+/// fails and writes nothing to stdout, which Claude Code reads into the
+/// conversation for some events; with no engine running there is nothing to
+/// show, and the reason goes to stderr, which Claude Code only logs.
+fn claude(args: &mut Vec<String>) -> Result<(), String> {
+    let session = take_value(args, "--session")?;
+    for (flag, on) in [("--enable", true), ("--disable", false)] {
+        if take_flag(args, flag) {
+            no_more(args)?;
+            // On only once Claude Code is connected; off at once, whatever Claude Code says.
+            if on {
+                claude::set_up(true)?;
+                profile::set_claude(true)?;
+            } else {
+                profile::set_claude(false)?;
+                claude::set_up(false)?;
+            }
+            println!("{}", if on { "Claude Code's status shows on the light bar" } else { "Claude Code's status is off; your own status line is back" });
+            return Ok(());
+        }
+    }
+    if take_flag(args, "--statusline") {
+        return match args.split_first() {
+            None => status_line(&[]),
+            Some((dashes, command)) if dashes == "--" => status_line(command),
+            Some(_) => Err("usage: loginux claude --statusline [-- COMMAND...]".into()),
+        };
+    }
+    if take_flag(args, "--hook") {
+        no_more(args)?;
+        let mut json = String::new();
+        let _ = std::io::stdin().read_to_string(&mut json);
+        let entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT").ok();
+        let pid = std::env::var("CLAUDE_PID").ok().and_then(|p| p.parse().ok());
+        if let Some((session, signal)) = claude::from_hook(&json, entrypoint.as_deref(), pid)
+            && let Err(e) = ipc::request_within(&Request::Claude { session, signal, pid }, HOOK_WAIT)
+        {
+            eprintln!("loginux: {e}");
+        }
+        return Ok(());
+    }
+    let [name] = args.as_slice() else { return Err("usage: loginux claude --hook | EVENT [--session ID]".into()) };
+    let signal = claude::Signal::from_name(name)?;
+    ipc::request(&Request::Claude { session: session.unwrap_or_else(|| "manual".into()), signal, pid: None })?;
+    Ok(())
+}
+
+/// `loginux claude --statusline [-- COMMAND...]`, which Claude Code runs as its
+/// status line: tells the engine the instance's context and the usage limits
+/// from the JSON on stdin, and runs COMMAND, the status line the user had, on
+/// the same JSON, so what it prints is the status line. Never fails, like a hook.
+fn status_line(command: &[String]) -> Result<(), String> {
+    let mut json = String::new();
+    let _ = std::io::stdin().read_to_string(&mut json);
+    let mut child = command.split_first().and_then(|(program, rest)| {
+        let spawned = std::process::Command::new(program).args(rest).stdin(std::process::Stdio::piped()).spawn();
+        spawned.map_err(|e| eprintln!("loginux: {program}: {e}")).ok()
+    });
+    if let Some(mut input) = child.as_mut().and_then(|c| c.stdin.take()) {
+        let _ = std::io::Write::write_all(&mut input, json.as_bytes()); // closed on drop: the end of its input
+    }
+    let entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT").ok();
+    let pid = std::env::var("CLAUDE_PID").ok().and_then(|p| p.parse().ok());
+    if let Some((session, usage)) = claude::from_status_line(&json, entrypoint.as_deref(), pid)
+        && let Err(e) = ipc::request_within(&Request::ClaudeUsage { session, usage, pid }, HOOK_WAIT)
+    {
+        eprintln!("loginux: {e}");
+    }
+    if let Some(mut child) = child {
+        let _ = child.wait();
+    }
+    Ok(())
+}
+
 /// `loginux effect 0=wave logo=breathe,color=ff0000 --hold 10`: built-in effects
 /// on lighting clusters, in RAM. Clusters not named are left as they are.
 fn effect(device: Option<PathBuf>, args: &mut Vec<String>) -> Result<(), String> {
@@ -653,6 +748,7 @@ mod tests {
             hosted: false,
             controls,
             rate_change,
+            claude: vec![],
         })
     }
 
@@ -966,6 +1062,7 @@ mod tests {
                 game_mode: Some(true),
             }),
             rate_change: Some(RateChange::Failed { hz: 8000, error: "refused".into() }),
+            claude: vec![claude::State::Asking, claude::State::Working],
         };
         let text = describe(&s);
         for want in [
@@ -976,6 +1073,7 @@ mod tests {
             "report rate: 1000 Hz; supports 1000, 2000, 8000 (8000 refused by the keyboard); Loginux sets it back to 2000 Hz after a reconnect",
             "game mode: on (read only)",
             "report-rate change to 8000 Hz failed: refused",
+            "claude code: asking, working",
             "last message: hello",
         ] {
             assert!(text.contains(want), "{want} missing from\n{text}");
@@ -995,6 +1093,41 @@ mod tests {
         }
         assert!(controls_text(&Controls::default()).contains("report rate: not reported"));
         s.rate_change = None;
-        assert!(!describe(&s).contains("report-rate change"));
+        s.claude.clear();
+        assert!(!describe(&s).contains("report-rate change") && !describe(&s).contains("claude code"));
+    }
+
+    #[test]
+    fn claude_signals_go_to_the_engine() {
+        let _serial = testenv::serial();
+        let engine = stand_in(vec![reply(None, None), reply(None, None)]);
+        run("claude done").unwrap();
+        run("claude asking --session s1").unwrap();
+        match &engine.join().unwrap()[..] {
+            [
+                Request::Claude { session: a, signal: claude::Signal::Done, pid: None },
+                Request::Claude { session: b, signal: claude::Signal::Asking, pid: None },
+            ] => {
+                assert_eq!((a.as_str(), b.as_str()), ("manual", "s1"));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(run("claude thinking").unwrap_err().contains("is not one of start, prompt"));
+        assert!(run("claude").unwrap_err().starts_with("usage"));
+        assert!(run("claude done --hook").unwrap_err().contains("unexpected argument \"done\""));
+        assert!(run("claude --statusline bash x.sh").unwrap_err().starts_with("usage: loginux claude --statusline"));
+        assert!(run("claude --enable now").unwrap_err().contains("unexpected argument \"now\""));
+        // --enable and --disable do what the editor's switch does.
+        let settings = testenv::init().join("claude/settings.json");
+        let _ = std::fs::remove_file(&settings);
+        run("claude --enable").unwrap();
+        assert!(profile::claude_on() && std::fs::read_to_string(&settings).unwrap().contains("loginux claude --statusline"));
+        run("claude --disable").unwrap();
+        assert!(!profile::claude_on() && !std::fs::read_to_string(&settings).unwrap().contains("statusLine"));
+        std::fs::write(&settings, "{broken").unwrap();
+        assert!(run("claude --enable").unwrap_err().contains("left as it is"));
+        profile::set_claude(false).unwrap();
+        std::fs::remove_file(&settings).unwrap();
+        assert!(run("claude done").unwrap_err().contains("no loginux engine"), "by hand, a missing engine is said");
     }
 }

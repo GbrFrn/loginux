@@ -222,6 +222,7 @@ mod tests {
             hosted: false,
             controls: Some(Controls::default()),
             rate_change: None::<RateChange>,
+            claude: vec![],
         };
         let mut t = idle();
         (t.status, t.profiles) = (Some(status), vec!["Evening".into(), "Test".into()]);

@@ -135,3 +135,86 @@ fn waiting(dir: &Path) -> Child {
     sleep(Duration::from_millis(200)); // inside flock by now
     child
 }
+
+/// `loginux claude --hook` with `json` on stdin, as Claude Code 2.1.309 runs it
+/// in the process 4242.
+fn hook(dir: &Path, entrypoint: &str, json: &str) -> Output {
+    let mut child = loginux(dir, &["claude", "--hook"])
+        .env("CLAUDE_CODE_ENTRYPOINT", entrypoint)
+        .env("CLAUDE_PID", "4242")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(json.as_bytes()).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn a_claude_code_hook_never_fails_or_writes_to_stdout() {
+    let scratch = scratch();
+    let dir = &scratch.0;
+    let prompt = r#"{"session_id":"s1","hook_event_name":"UserPromptSubmit","prompt":"hi"}"#;
+    // No engine: nothing to show. Claude Code would read stdout as part of the prompt.
+    let out = hook(dir, "cli", prompt);
+    assert!(out.status.success() && out.stdout.is_empty(), "{out:?}");
+    assert!(text(&out.stderr).contains("no loginux engine"), "{}", text(&out.stderr));
+    let headless = hook(dir, "sdk-cli", prompt);
+    assert!(headless.status.success() && headless.stderr.is_empty(), "a `claude -p` run is not shown");
+    // An engine gets the instance, its process and the signal.
+    std::fs::create_dir_all(dir.join("run/loginux")).unwrap();
+    let listener = std::os::unix::net::UnixListener::bind(dir.join("run/loginux/sock")).unwrap();
+    let engine = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        BufReader::new(&stream).read_line(&mut line).unwrap();
+        let status = r#"{"ok":{"device":{"state":"missing"},"control":{"state":"onboard"},"active":null,"message":null,"pid":1,"hosted":false}}"#;
+        (&stream).write_all(format!("{status}\n").as_bytes()).unwrap();
+        line
+    });
+    let out = hook(dir, "cli", prompt);
+    assert!(out.status.success() && out.stdout.is_empty() && out.stderr.is_empty(), "{out:?}");
+    assert_eq!(engine.join().unwrap(), "{\"claude\":{\"session\":\"4242\",\"signal\":\"prompt\",\"pid\":4242}}\n");
+}
+
+#[test]
+fn the_status_line_passes_through_to_the_users_own() {
+    let scratch = scratch();
+    let dir = &scratch.0;
+    let json = r#"{"session_id":"s1","context_window":{"used_percentage":42},"rate_limits":{"five_hour":{"used_percentage":81,"resets_at":1}}}"#;
+    let line = |args: &[&str]| {
+        let mut child = loginux(dir, args)
+            .env("CLAUDE_CODE_ENTRYPOINT", "cli")
+            .env("CLAUDE_PID", "4242")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(json.as_bytes()).unwrap();
+        child.wait_with_output().unwrap()
+    };
+    // The user's own status line gets the same JSON, and what it prints is the status line.
+    let out = line(&["claude", "--statusline", "--", "sh", "-c", "grep -c context_window"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(text(&out.stdout), "1\n");
+    assert!(text(&out.stderr).contains("no loginux engine"), "and the engine was tried");
+    let missing = line(&["claude", "--statusline", "--", "/nonexistent/statusline"]);
+    assert!(missing.status.success() && text(&missing.stderr).contains("/nonexistent/statusline"));
+    // An engine gets the instance's context and the limits.
+    std::fs::create_dir_all(dir.join("run/loginux")).unwrap();
+    let listener = std::os::unix::net::UnixListener::bind(dir.join("run/loginux/sock")).unwrap();
+    let engine = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        BufReader::new(&stream).read_line(&mut line).unwrap();
+        let status = r#"{"ok":{"device":{"state":"missing"},"control":{"state":"onboard"},"active":null,"message":null,"pid":1,"hosted":false}}"#;
+        (&stream).write_all(format!("{status}\n").as_bytes()).unwrap();
+        line
+    });
+    let quiet = line(&["claude", "--statusline"]);
+    assert!(quiet.status.success() && quiet.stdout.is_empty(), "{quiet:?}");
+    let request = engine.join().unwrap();
+    assert!(request.starts_with(r#"{"claude-usage":{"session":"4242","usage":{"context":42.0,"limits":true,"five_hour":{"used":81.0,"resets_at":1}"#), "{request}");
+}

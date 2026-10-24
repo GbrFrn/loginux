@@ -2,6 +2,7 @@
 //! the command line): one JSON request per line, one JSON reply per line. The
 //! socket sits in $XDG_RUNTIME_DIR/loginux, a directory only this user can enter.
 
+use crate::claude::{Signal, State, Usage};
 use crate::profile::Profile;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -29,6 +30,23 @@ pub enum Request {
     /// keyboard can re-enumerate, and the engine reads the rate back after it
     /// returns.
     SetReportRate { hz: u32 },
+    /// A Claude Code hook event for the status display (`loginux claude`), from
+    /// the instance or subagent `session` names; `pid` is the instance's Claude
+    /// Code process, which keeps its share of the light bar while it runs.
+    Claude {
+        session: String,
+        signal: Signal,
+        #[serde(default)]
+        pid: Option<u32>,
+    },
+    /// What a Claude Code instance's status line reports: its context and the
+    /// account's usage limits (`loginux claude --statusline`).
+    ClaudeUsage {
+        session: String,
+        usage: Usage,
+        #[serde(default)]
+        pid: Option<u32>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -110,6 +128,9 @@ pub struct Status {
     pub controls: Option<Controls>,
     #[serde(default)]
     pub rate_change: Option<RateChange>,
+    /// Each running Claude Code instance's state, in their order on the light bar.
+    #[serde(default)]
+    pub claude: Vec<State>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -164,11 +185,16 @@ impl From<Error> for String {
 
 /// One request to the running engine.
 pub fn request(req: &Request) -> Result<Status, Error> {
+    request_within(req, Duration::from_secs(5))
+}
+
+/// One request, waiting at most `timeout` for each read and write.
+pub fn request_within(req: &Request, timeout: Duration) -> Result<Status, Error> {
     let gone = |e: String| Error::Unreachable(e);
     let path = socket_path().map_err(gone)?;
     let mut stream =
         UnixStream::connect(&path).map_err(|e| gone(format!("no loginux engine at {}: {e}", path.display())))?;
-    let timeout = Some(Duration::from_secs(5));
+    let timeout = Some(timeout);
     stream.set_read_timeout(timeout).and_then(|_| stream.set_write_timeout(timeout)).map_err(|e| gone(e.to_string()))?;
     let mut line = serde_json::to_string(req).map_err(|e| Error::Refused(e.to_string()))?;
     line.push('\n');
@@ -198,6 +224,7 @@ mod tests {
             hosted: false,
             controls: None,
             rate_change: None,
+            claude: vec![],
         }
     }
 
@@ -222,6 +249,8 @@ mod tests {
             Request::Check { zone: Some(38) },
             Request::TakeOver,
             Request::SetReportRate { hz: 8000 },
+            Request::Claude { session: "4242/a7".into(), signal: Signal::Asking, pid: Some(4242) },
+            Request::ClaudeUsage { session: "4242".into(), usage: Usage { context: Some(81.5), ..Usage::default() }, pid: Some(4242) },
         ] {
             let line = serde_json::to_string(&req).unwrap();
             let back: Request = serde_json::from_str(&line).unwrap();
@@ -236,7 +265,7 @@ mod tests {
                       "control":{"state":"profile","name":"Test"},"active":"Test","message":null,"pid":1,"hosted":false}"#;
         let s: Status = serde_json::from_str(old).unwrap();
         assert!(matches!(s.device, Device::Connected { ref effects, .. } if effects.is_empty()));
-        assert!(s.controls.is_none() && s.rate_change.is_none());
+        assert!(s.controls.is_none() && s.rate_change.is_none() && s.claude.is_empty());
         let reply = serde_json::to_string(&Reply::Err("no".into())).unwrap();
         assert!(matches!(serde_json::from_str::<Reply>(&reply).unwrap(), Reply::Err(e) if e == "no"));
     }

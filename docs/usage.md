@@ -6,6 +6,7 @@ The README has the short version; this page has the rest.
 - [The editor](#the-editor)
 - [The tray icon](#the-tray-icon)
 - [Notifications](#notifications)
+- [Claude Code status](#claude-code-status)
 - [Command line](#command-line)
 - [Profiles](#profiles) and [effects](#effects)
 - [Device settings](#device-settings)
@@ -92,6 +93,117 @@ notification replaces the last one. They are sent through
 turn them off, find Loginux in the desktop's notification settings (on KDE
 Plasma: System Settings, Notifications, Configure for Applications).
 
+## Claude Code status
+
+Loginux can turn the light bar into a status line for Claude Code. It is
+optional and off until you turn on SHOW ON THE LIGHT BAR under SETTINGS, or
+run `loginux claude --enable`. That installs Loginux's plugin in Claude Code
+(`claude plugin install loginux-status --marketplace GbrFrn/loginux`), whose
+hooks report what Claude Code does, and puts Loginux in front of your status
+line, which is the only place Claude Code reports context and usage limits.
+Your status line still runs and shows as before. Turning the switch off, or
+`loginux claude --disable`, turns the plugin off, leaving it and its
+marketplace installed, and puts your status line command back as it was.
+Both are written to survive Loginux being uninstalled first: the hooks then
+do nothing, and your status line runs on its own.
+
+Each running Claude Code gets its own share of the light bar, from the moment
+it starts until its process ends. One instance has all 30 segments, two have
+15 each, four have 7, 8, 7 and 8, and thirty have one each; an instance beyond
+that waits for a segment. A share shows its instance's state as pixel art, 12.5
+frames a second:
+
+| Claude Code | Its share of the light bar |
+| --- | --- |
+| Open, before the first prompt | dim orange, lit from its middle, with a heartbeat every 3 seconds |
+| Thinking | an orange pulse spreads from the middle and back |
+| Running a tool | orange pairs run out from the middle |
+| Compacting the conversation | violet, squeezing in from both ends |
+| Waiting for you: a permission, a question, a plan or an MCP server's form | amber lights run in from both ends to a blinking middle |
+| Finished, waiting for your next prompt | fills green from both ends and stays lit, a white glint crossing it every 6 seconds |
+| Stopped on an API error, or on a usage limit | a broken red line that jumps a step every 3 seconds |
+| Closed | flashes white, then shrinks to its middle |
+
+A subagent counts as part of its instance, and the share shows whichever of
+them most wants you: waiting, then an error, finished, a tool, compacting and
+thinking. Your next prompt, or the end of the turn, settles what the subagents
+were doing; one still running comes back with its next event.
+
+The context and the usage limits show on the bar too:
+
+| Situation | On the light bar | On the keys |
+| --- | --- | --- |
+| The context fills up | from 70 %, violet walls close in on the instance's share, a third of it at most at 95 % | the C key and the number row, filled to the tenths used, at 90 % |
+| The 5-hour limit | the bar's left end lamp: amber from 80 %, red and blinking from 95 %, red once reached | the H key and the number row at 80, 90 and 95 % |
+| The weekly limit, or a Claude apps gateway's spend limit | the right end lamp, the same way | the W or S key and the number row |
+| A turn stopped on a usage limit | both lamps red until Claude works again | a cross |
+
+The keys keep the chosen profile. An effect pauses on a still frame of itself,
+a rainbow across the board for Wave and Colour Cycle, and runs again once no
+Claude Code is open. For about a second and a half the keys go dark and show
+a sprite, one key to a pixel:
+
+- a new instance: Claude Code's spinner turns once in the middle of the keys;
+- a turn that waits for you, or finishes, at least 30 seconds after you last
+  typed a prompt or answered: an exclamation mark, or a check mark;
+- an API error: a cross that lands with a glitch;
+- the context or a limit crossing a mark: the gauges above.
+
+No sprite starts within ten seconds of another. With no profile chosen,
+Loginux leaves the lighting to the keyboard and shows nothing, and an edit in
+the editor and the channel check show over the display.
+
+What Claude Code reports, and what Loginux makes of it:
+
+| Claude Code event | Shown as |
+| --- | --- |
+| `SessionStart` | a new instance, idle (not after `/compact`) |
+| `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure`, `PostCompact` (automatic) | thinking |
+| `PreToolUse` | running a tool, or waiting for you for `AskUserQuestion` and `ExitPlanMode` |
+| `PermissionRequest`; `Notification` for a permission prompt or an MCP form | waiting for you |
+| `Stop` | finished |
+| `Notification` `idle_prompt`; `PostCompact` after `/compact` | finished, with no sprite; an error, or an instance with no turn yet, stays as it is |
+| `StopFailure` | stopped on an error; on a usage limit if its error is `rate_limit` |
+| `Notification` `quota_auto_resume_fired` | thinking: Claude Code resumed after a limit reset |
+| `PreCompact` | compacting |
+| `SubagentStop` | the subagent is done |
+| `SessionEnd` | the instance closes (not for `/clear` and `/resume`, which go on in the same instance) |
+| The status line's `context_window` and `rate_limits` | the context walls, the end lamps and the gauges |
+
+Runs without a person at the terminal, `claude -p` and the Agent SDK, are left
+out. An interrupt (Esc) sends no event, so a share keeps its state until the
+next one, such as Claude Code's notice a minute later that it is waiting for
+input; thinking
+or a tool with no event for 15 minutes shows as idle. Claude Code tells the
+hook which process it runs in through `CLAUDE_PID`; without it, an instance
+is its session and drops off after 30 minutes without an event.
+
+A hook writes nothing to standard output, which Claude Code would read, and
+always exits successfully. The engine answers it before drawing, and a hook
+gives up on the engine after a second; without an engine running, there is
+nothing to show. Counted from the frames the display draws, a moving share
+sends at most 6 HID++ reports a frame, about 25 a second while Claude thinks,
+nothing between the glints of a finished one, and a sprite at most a full
+frame of 33. Its cost to the service has not been measured on the keyboard yet.
+
+LEDs do not show a colour the way a screen does. To change the colours, write
+`~/.config/loginux/claude.toml`; the display reads it at the next event, and a
+value it cannot read keeps its default:
+
+```toml
+working = "#ff5a14"      # open, thinking and tools
+compacting = "#963cff"   # compacting and the context walls
+asking = "#ffb400"       # waiting for you, and limits from 80 %
+done = "#28ff5a"
+error = "#ff0000"        # errors, and limits from 95 %
+```
+
+`loginux claude EVENT` sets the display by hand, for an instance named
+`manual` unless `--session` names another. EVENT is `start`, `prompt`,
+`working`, `tool`, `compact`, `asking`, `done`, `waiting`, `error`, `limit`
+or `end`, which closes the instance. `loginux status` lists each instance's state, in
+their order on the bar.
+
 ## Command line
 
 | Command | What it does |
@@ -106,6 +218,8 @@ Plasma: System Settings, Notifications, Configure for Applications).
 | `loginux rate [HZ]` | Shows the report rate, or changes it, reads it back and keeps it (the keyboard may reconnect) |
 | `loginux run [--refresh S]` | The engine: keeps the profile applied; the service runs this |
 | `loginux probe --device /dev/hidrawN` | Read-only: prints a starting definition for a new device |
+| `loginux claude --enable` or `--disable` | Connects Claude Code to the light bar, or disconnects it: [Claude Code status](#claude-code-status) |
+| `loginux claude --hook`, `--statusline` or `EVENT` | What Claude Code's hooks and status line run, or a state set by hand |
 
 `--device /dev/hidrawN` picks the node by hand; Loginux checks that it really
 is the HID++ interface of a known device before sending anything, except
@@ -275,21 +389,23 @@ among the effects it can play on all clusters at once, it goes to cluster
 `0xFF`, so keys and light bar run on one clock; otherwise each cluster gets
 its own. After that a change stages only the zones that changed, at most about
 60 frames a second while you drag a colour, and the claim is checked every two
-seconds; if the keyboard reset itself, Loginux paints again. A single engine
+seconds; if the keyboard reset itself, Loginux paints again. The Claude Code
+status display is drawn the same way, with no other requests. A single engine
 owns the keyboard at a time (a lock in `$XDG_RUNTIME_DIR/loginux`), and the
 editor and the command line talk to it over a socket there.
 
 ## Files
 
 - `~/.config/loginux/profiles/*.toml`: profiles
-- `~/.config/loginux/config.toml`: the chosen profile and the keyboard last
-  seen
+- `~/.config/loginux/config.toml`: the chosen profile, the keyboard last
+  seen, and whether Claude Code's status shows
 - `~/.config/loginux/checks/KEYBOARD.toml`: channel-check answers per keyboard
   model
 - `~/.config/loginux/rates/KEYBOARD.toml`: the report rate you chose for this
   keyboard (`keep`) and the rates it refused; delete it to forget both
 - `~/.config/loginux/devices/*.toml`: your own device definitions; one with
   a built-in's ID replaces it
+- `~/.config/loginux/claude.toml`: colours of the Claude Code status display
 - `$XDG_RUNTIME_DIR/loginux/`: lock, socket and a claim record per device
   (cleared at logout)
 
@@ -310,6 +426,12 @@ a lighting release and an engine restart. The keyboard re-enumerated once,
 about two and a half minutes after a change to 2000 Hz, and came back at
 1000 Hz. After a replug with 8000 Hz kept, the keyboard came back at another
 rate; Loginux sent 8000 Hz again as it connected and read it back 5 s later.
+On 2026-10-24 the Claude Code status display ran on a G316 X 98 with events
+sent by hand: each state, three instances sharing the light bar, the spinner,
+question mark, check and cross sprites, and instances closing. Some sprites
+and patterns were retouched after that, and the context walls, the limit lamps
+and the gauges were added; those have run only against the simulated keyboard
+of the tests and in pictures drawn from its frames.
 [`research/`](../research/README.md) records the evidence and its labels.
 
 ## Credits

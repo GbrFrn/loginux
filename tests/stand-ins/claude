@@ -1,0 +1,13 @@
+#!/bin/sh
+# Stand-in for `claude` in Loginux's tests (src/testenv.rs): logs each call in
+# $LOGINUX_TEST_CLAUDE/log, waits while a `hold` file exists there, fails while
+# a `fails` file does, and, as Claude Code does, `plugin disable` turns the
+# plugin off in $CLAUDE_CONFIG_DIR/settings.json.
+cd "${LOGINUX_TEST_CLAUDE:?set by the tests}" || exit 1
+echo "$*" >> log
+while [ -f hold ]; do sleep 0.02; done
+if [ -f fails ]; then echo "refused for the test" >&2; exit 1; fi
+case "$*" in
+"plugin disable"*) sed -i 's/"loginux-status@loginux": true/"loginux-status@loginux": false/' "${CLAUDE_CONFIG_DIR:?}/settings.json" 2>/dev/null ;;
+esac
+exit 0

@@ -81,6 +81,19 @@ not, rather than presenting metadata as fact.
   (2026-10-22); report-rate changes to 2000, 4000 and 8000 Hz, each read
   back, and the kept rate sent again and read back after a replug
   (2026-10-23). Brightness and game mode have only been read.
+- Optional, and off until the editor's switch (or `loginux claude --enable`)
+  turns it on: the light bar as a status line for Claude Code, one share per
+  running instance, with its context and the account's usage limits, drawn by
+  the engine as per-key frames (no other requests). The keys keep the chosen
+  profile, an effect paused on a still frame, and show a short pixel sprite
+  only when an instance starts, when a long turn waits or ends, on an error,
+  and when the context or a limit crosses a mark (GbrFrn, 2026-10-24: the
+  light bar is the constant status indicator; animations on the keys rarer,
+  like pixel art; instances split the bar). Turning it on installs Loginux's
+  Claude Code plugin from this repository's marketplace and passes the user's
+  status line command through Loginux, both written to keep working if
+  Loginux is uninstalled; turning it off disables the plugin, leaving it
+  installed, and puts the command back. Nothing shows without a chosen profile.
 - Out of scope for now: the dot screen. It is a separate phase.
 
 ## G316 controls

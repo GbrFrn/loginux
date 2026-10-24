@@ -9,6 +9,7 @@
 //! other program, and loginux waits for an explicit take-over instead of
 //! overwriting it.
 
+use crate::claude;
 use crate::device::{Event, Keyboard, RATES_HZ};
 use crate::effects::{self, Effect};
 use crate::hidpp::Error;
@@ -382,6 +383,12 @@ struct Engine {
     /// lighting), so a change made anywhere is announced once; None until the
     /// first read, which is not announced.
     chosen: Option<Option<String>>,
+    /// Claude Code's status display, on the light bar while an instance runs.
+    claude: claude::Display,
+    /// A Claude Code signal waits to be drawn, right after its reply.
+    redraw: bool,
+    /// The editor's switch for Claude Code's status, from config.toml.
+    claude_on: bool,
 }
 
 fn log(msg: &str) {
@@ -410,7 +417,7 @@ pub fn run(opts: Options, hosted: bool, stop: Arc<AtomicBool>, lock: Lock) -> Re
 /// `stop`, a signal, or the end of the requests.
 fn drive(engine: &mut Engine, rx: &Receiver<Job>, stop: &AtomicBool) {
     while !stop.load(Ordering::SeqCst) && !STOP.load(Ordering::SeqCst) {
-        match rx.recv_timeout(TICK) {
+        match rx.recv_timeout(engine.wait()) {
             Ok((req, reply)) => {
                 let answer = engine.handle(req);
                 let _ = reply.send(answer);
@@ -477,6 +484,9 @@ impl Engine {
             restored: None,
             dropped: vec![],
             chosen: None,
+            claude: claude::Display::default(),
+            redraw: false,
+            claude_on: profile::claude_on(),
         }
     }
 
@@ -511,6 +521,17 @@ impl Engine {
                 Ok(())
             }
             Request::SetReportRate { hz } => self.set_report_rate(hz, false),
+            Request::Claude { session, signal, pid } => {
+                // Drawn on the loop's next turn: a hook never waits for the keyboard.
+                self.claude.signal(&session, signal, pid, Instant::now());
+                self.redraw = true;
+                return Reply::Ok(self.status());
+            }
+            Request::ClaudeUsage { session, usage, pid } => {
+                self.claude.usage(&session, usage, pid, Instant::now());
+                self.redraw = true;
+                return Reply::Ok(self.status());
+            }
         };
         self.tick();
         match result {
@@ -674,8 +695,34 @@ impl Engine {
         Ok(())
     }
 
+    /// How long the loop waits for a request before it ticks: not at all when a
+    /// Claude Code signal waits to be drawn, to its next frame while it moves.
+    fn wait(&self) -> Duration {
+        let held = self.link.as_ref().is_some_and(|l| l.held.is_some());
+        if self.redraw {
+            Duration::ZERO
+        } else if held
+            && self.claude_may_show()
+            && let Some(wait) = self.claude.next_frame(Instant::now())
+        {
+            wait
+        } else {
+            TICK
+        }
+    }
+
+    /// Claude Code's status takes the light bar from the chosen profile, but not
+    /// from an edit in the editor or a channel check, and not while the editor's
+    /// switch has it off; with no profile chosen, Loginux leaves the lighting to
+    /// the keyboard.
+    fn claude_may_show(&self) -> bool {
+        self.claude_on && self.active.is_some() && self.preview.is_none() && self.check.is_none()
+    }
+
     fn tick(&mut self) {
+        self.redraw = false;
         let now = Instant::now();
+        self.claude.prune(now);
         if now >= self.next_reload {
             self.reload();
         }
@@ -724,6 +771,7 @@ impl Engine {
     /// Follows config.toml and the chosen profile's file, so hand edits apply.
     fn reload(&mut self) {
         self.next_reload = Instant::now() + Duration::from_secs(1);
+        self.claude_on = profile::claude_on();
         let Some(name) = profile::active() else {
             self.active = None;
             return self.announce(None);
@@ -866,6 +914,12 @@ impl Engine {
             let dark = zones.iter().filter(|&&z| model.zone(z).is_some_and(|z| z.kind != Kind::Unknown) && z != id);
             let frame = dark.map(|&z| (z, [0; 3])).chain([(id, [0xFF; 3])]).collect();
             return Ok(Some(Look::Colours([0; 3], frame)));
+        }
+        if self.claude_may_show()
+            && let Some((_, p, _)) = &self.active
+            && let Some(frame) = self.claude.frame(self.model, zones, p, Instant::now())
+        {
+            return Ok(Some(Look::Colours(p.base("keys"), frame)));
         }
         let Some(p) = self.preview.as_ref().map(|p| &p.0).or(self.active.as_ref().map(|a| &a.1)) else { return Ok(None) };
         match &p.effect {
@@ -1031,6 +1085,7 @@ impl Engine {
             hosted: self.hosted,
             controls: self.link.as_ref().map(|l| l.controls.clone()),
             rate_change: self.rate_change.clone(),
+            claude: self.claude.states(Instant::now()),
         }
     }
 
@@ -1660,6 +1715,87 @@ mod tests {
             Some(RateChange::Failed { error, .. }) => error.clone(),
             other => panic!("not a failed change: {other:?}"),
         }
+    }
+
+    #[test]
+    fn claude_codes_status_takes_the_light_bar_and_leaves_the_keys() {
+        use crate::claude::{Signal, State};
+        let _serial = crate::testenv::serial();
+        let _ = fs::remove_file(profile::config_dir().join("claude.toml"));
+        clear_marker("g316-x-98");
+        profile::set_claude(true).unwrap();
+        let (mut e, fake) = linked();
+        colours("T claude", [9, 9, 9]);
+        ok(e.handle(Request::Use { profile: Some("T claude".into()) }));
+        e.step().unwrap();
+        let statics = |fake: &Fake| fake.requests(0x8071).iter().filter(|r| r.0 == 1).count();
+        let frames = fake.state().frames;
+        let painted = statics(&fake);
+        // A hook's signal is answered before anything is sent, then drawn at once.
+        let me = Some(std::process::id());
+        let s = ok(e.handle(Request::Claude { session: "1".into(), signal: Signal::Prompt, pid: me }));
+        assert_eq!((s.claude, fake.state().frames), (vec![State::Working], frames));
+        assert_eq!(e.wait(), Duration::ZERO);
+        e.tick();
+        assert!(e.wait() <= Duration::from_millis(80), "the bar moves: the engine waits for its next frame");
+        {
+            let st = fake.state();
+            let bar: Vec<Rgb> = e.model.strips[0].zones.iter().map(|z| st.shown[z]).collect();
+            assert!(st.frames > frames && bar.iter().any(|c| c[0] > 200), "thinking pulses on the bar");
+        }
+        // The new instance's spark crosses the keys; then they show the profile again.
+        let end = Instant::now() + Duration::from_secs(3);
+        while fake.state().shown[&38] != [9, 9, 9] {
+            assert!(Instant::now() < end, "the keys did not come back to the profile");
+            sleep(Duration::from_millis(20));
+            e.tick();
+        }
+        assert_eq!(fake.state().shown[&39], [0x10, 0x20, 0x30]);
+        assert_eq!(statics(&fake), painted, "same base colour: only changed zones went out, no repaint");
+        // An edit in the editor shows over the status, at the usual pace.
+        e.preview = preview();
+        e.tick();
+        assert_eq!((fake.state().shown[&160], e.wait()), ([0; 3], TICK), "the edit's dark bar");
+        e.preview = None;
+        // An effect waits while an instance runs, and plays once none does.
+        let waves = |fake: &Fake| fake.requests(0x8071).iter().filter(|r| r.0 == 1 && r.1[0] == 0xFF).count();
+        ok(e.handle(Request::Use { profile: Some("Wave".into()) }));
+        e.tick();
+        assert_eq!(waves(&fake), 0, "a still frame of the wave instead");
+        e.claude = claude::Display::default();
+        e.tick();
+        assert_eq!((waves(&fake), e.wait()), (1, TICK));
+        assert!(e.status().claude.is_empty());
+        // A status line's report is taken in like a hook's, and drawn after the reply.
+        let usage = crate::claude::Usage { context: Some(50.0), ..Default::default() };
+        let s = ok(e.handle(Request::ClaudeUsage { session: "2".into(), usage, pid: me }));
+        assert_eq!((s.claude, e.wait()), (vec![State::Idle], Duration::ZERO), "a new instance");
+        e.tick();
+        assert_eq!(waves(&fake), 1, "the wave waits again");
+        // Switched off in the editor: the profile has the light bar back.
+        profile::set_claude(false).unwrap();
+        e.reload();
+        e.tick();
+        assert_eq!(waves(&fake), 2, "the wave again");
+        // With no profile chosen the keyboard keeps its own lighting.
+        profile::set_claude(true).unwrap();
+        ok(e.handle(Request::Use { profile: None }));
+        ok(e.handle(Request::Claude { session: "1".into(), signal: Signal::Asking, pid: me }));
+        e.tick();
+        assert_eq!((fake.state().sw, e.wait()), ((0, 0), TICK), "not taken for the status");
+        e.shutdown();
+        profile::set_claude(false).unwrap();
+        profile::delete("T claude").unwrap();
+    }
+
+    #[test]
+    fn claude_signals_without_a_keyboard_wait_at_the_usual_pace() {
+        let _serial = crate::testenv::serial();
+        let mut e = engine();
+        ok(e.handle(Request::Claude { session: "s1".into(), signal: crate::claude::Signal::Tool, pid: None }));
+        assert_eq!(e.wait(), Duration::ZERO);
+        e.tick();
+        assert_eq!(e.wait(), TICK, "nothing to draw on");
     }
 
     #[test]

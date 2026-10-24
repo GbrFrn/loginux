@@ -8,6 +8,7 @@
 //! shape is a pixel-aligned rectangle.
 
 use crate::effects::{self as fx, Effect};
+use crate::claude;
 use crate::engine::{self, Hosted, STOP};
 use crate::ipc::{self, Control, Device, RateChange, Request, Status};
 use crate::layout::{self, Kind, Model, Zone};
@@ -210,32 +211,51 @@ fn login_switch(ui: &mut Ui, at: Pos2, service: Service) -> (Response, Rect) {
         Some(on) => egui::WidgetInfo::selected(egui::Role::Switch, enabled, on, text),
         None => egui::WidgetInfo::labeled(egui::Role::Switch, enabled, text),
     });
-    let hot = enabled && resp.hovered();
-    // On: a red track, the knob in Ground at the right. Off: a grey edged track, the
-    // knob at the left. Waiting or unknown: Disabled grey.
-    let (ink, bg, edge, knob) = match service {
-        Service::Enabled => (TEXT, if hot { RED_HOT } else { RED }, Color32::TRANSPARENT, GROUND),
-        Service::Disabled if hot => (TEXT, RAISED, TEXT, TEXT),
-        Service::Disabled => (TEXT2, Color32::TRANSPARENT, TEXT2, TEXT2),
-        _ => (DISABLED, Color32::TRANSPARENT, RULE, DISABLED),
-    };
     let p = ui.painter();
+    let track = Rect::from_min_size(pos2(at.x - track.x, group.min.y), track);
+    let ink = if installed { paint_switch(p, track, on, enabled, enabled && resp.hovered()) } else { DISABLED };
     px_text(p, pos2(group.min.x, at.y - t.y / 2.0), text, LABEL_PX, ink);
-    if installed {
-        let r = Rect::from_min_size(pos2(at.x - track.x, group.min.y), track);
-        fill(p, r, bg);
-        outline(p, r, 2.0, edge);
-        let x = match on {
-            Some(true) => r.max.x - 12.0,
-            Some(false) => r.min.x + 4.0,
-            None => r.center().x - 4.0,
-        };
-        fill(p, Rect::from_min_size(pos2(x, r.min.y + 4.0), vec2(8.0, 8.0)), knob);
-    }
     if resp.has_focus() {
         outline(p, group.expand(3.0), 2.0, RED);
     }
     (resp, group)
+}
+
+/// A switch's 32 by 16pt track in `r` with its 8pt knob, and the ink for its
+/// label. On: a red track, the knob in Ground at the right. Off: a grey edged
+/// track, the knob at the left. Waiting or unknown: Disabled grey, the knob on
+/// the side asked for.
+fn paint_switch(p: &Painter, r: Rect, on: Option<bool>, enabled: bool, hot: bool) -> Color32 {
+    let (ink, bg, edge, knob) = match (on, enabled) {
+        (_, false) => (DISABLED, Color32::TRANSPARENT, RULE, DISABLED),
+        (Some(true), true) => (TEXT, if hot { RED_HOT } else { RED }, Color32::TRANSPARENT, GROUND),
+        (_, true) if hot => (TEXT, RAISED, TEXT, TEXT),
+        _ => (TEXT2, Color32::TRANSPARENT, TEXT2, TEXT2),
+    };
+    fill(p, r, bg);
+    outline(p, r, 2.0, edge);
+    let x = match on {
+        Some(true) => r.max.x - 12.0,
+        Some(false) => r.min.x + 4.0,
+        None => r.center().x - 4.0,
+    };
+    fill(p, Rect::from_min_size(pos2(x, r.min.y + 4.0), vec2(8.0, 8.0)), knob);
+    ink
+}
+
+/// A switch in the flow of a page: its label, then the track.
+fn switch(ui: &mut Ui, text: &str, on: bool, enabled: bool) -> Response {
+    let t = px_size(text, LABEL_PX, ui.pixels_per_point());
+    let track = vec2(32.0, 16.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(t.x + 10.0 + track.x, track.y), if enabled { Sense::click() } else { Sense::hover() });
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, enabled, on, text));
+    let p = ui.painter();
+    let ink = paint_switch(p, Rect::from_min_size(pos2(rect.max.x - track.x, rect.min.y), track), Some(on), enabled, enabled && resp.hovered());
+    px_text(p, pos2(rect.min.x, rect.center().y - t.y / 2.0), text, LABEL_PX, ink);
+    if resp.has_focus() {
+        outline(p, rect.expand(3.0), 2.0, RED);
+    }
+    resp
 }
 
 /// Bitmap text that never claims more width than the layout offers; overflow is clipped.
@@ -282,6 +302,9 @@ fn seconds_text(ms: u16) -> String {
 /// Seconds per cycle, in milliseconds, that FASTER and SLOWER step through: roughly
 /// even steps to the eye, from 1 to 20 seconds.
 const CYCLE_STEPS: [u16; 12] = [1000, 1500, 2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000, 20000];
+
+/// Said under the profile's name while Claude Code's status has the keyboard.
+const CLAUDE_NOTE: &str = "Claude Code's status has the light bar; an effect waits until it ends.";
 
 // ---- link to the engine ------------------------------------------------------
 
@@ -414,6 +437,23 @@ fn service_state() -> Service {
     }
 }
 
+// ---- Claude Code -------------------------------------------------------------------
+
+/// The CLAUDE CODE switch: whether the display is on, how Claude Code is
+/// connected to it, and the change a background job is making, if any.
+#[derive(Clone, Copy, Default)]
+struct ClaudeLink {
+    on: bool,
+    setup: claude::Setup,
+    changing: Option<bool>,
+}
+
+impl ClaudeLink {
+    fn read() -> ClaudeLink {
+        ClaudeLink { on: profile::claude_on(), setup: claude::setup(), changing: None }
+    }
+}
+
 // ---- the app ---------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq)]
@@ -495,6 +535,7 @@ struct App {
     step: usize,
     sent_check: Option<Option<u8>>,
     service: Arc<Mutex<Service>>,
+    claude: Arc<Mutex<ClaudeLink>>,
     notice: Option<(String, Color32)>,
     confirm: Option<Confirm>,
     new_name: Option<String>,
@@ -537,6 +578,7 @@ impl App {
             step: 0,
             sent_check: None,
             service,
+            claude: Arc::new(Mutex::new(ClaudeLink::read())),
             notice: None,
             confirm: None,
             new_name: None,
@@ -785,6 +827,11 @@ impl App {
             }
             if resp.clicked() {
                 self.tab = tab;
+                // Claude Code may have changed since: read its state again, unless a change runs.
+                let mut claude = self.claude.lock().expect("claude lock");
+                if claude.changing.is_none() {
+                    *claude = ClaudeLink::read();
+                }
             }
             x += size.x + 34.0;
         }
@@ -952,6 +999,10 @@ impl App {
             }
         };
         body(ui, lighting, TEXT2, 12.0);
+        let claude_on = self.claude.lock().expect("claude lock").on;
+        if claude_on && !s.claude.is_empty() && matches!(s.control, Control::Profile { .. }) {
+            body(ui, CLAUDE_NOTE, TEXT2, 12.0);
+        }
         if s.hosted && *self.service.lock().expect("service lock") != Service::Enabled {
             body(ui, "Lighting stays while this window is open.", LABEL, 12.0);
         }
@@ -1426,6 +1477,42 @@ impl App {
             ui.add_space(6.0);
             label(ui, &self.checked(), SMALL, LABEL);
         });
+        ui.add_space(14.0);
+        rule(ui);
+        ui.add_space(14.0);
+        label(ui, "CLAUDE CODE", LABEL_PX, LABEL);
+        ui.add_space(6.0);
+        body(ui, "Shows each running Claude Code on the light bar: what it is doing, its context filling up and your usage limits, with short sprites on the keys when a long turn needs you or ends.", TEXT2, 14.0);
+        ui.add_space(10.0);
+        let c = *self.claude.lock().expect("claude lock");
+        if switch(ui, "SHOW ON THE LIGHT BAR", c.changing.unwrap_or(c.on), c.changing.is_none()).clicked() {
+            self.set_claude(!c.on);
+        }
+        ui.add_space(6.0);
+        let note = match (c.changing, c.on, c.setup.plugin, c.setup.status_line) {
+            (Some(true), ..) => "Connecting Claude Code\u{2026}",
+            (Some(false), ..) => "Disconnecting Claude Code\u{2026}",
+            (None, false, ..) => "Off. Turning it on installs Loginux's Claude Code plugin and passes your status line through Loginux, which keeps it as it was.",
+            (None, true, true, true) => "On: Claude Code's hooks and its status line reach Loginux.",
+            (None, true, true, false) => "On, but Claude Code's status line does not pass through Loginux, so context and usage limits do not show.",
+            (None, true, false, _) => "On, but Loginux's plugin is off in Claude Code. Turn this off and on to connect again.",
+        };
+        body(ui, note, LABEL, 12.5);
+    }
+
+    /// Connects Claude Code to the light bar, or disconnects it, off the UI
+    /// thread: `claude plugin` can take a while. A failure shows as a notice.
+    fn set_claude(&mut self, on: bool) {
+        self.claude.lock().expect("claude lock").changing = Some(on);
+        let (slot, link) = (self.claude.clone(), self.link.clone());
+        thread::spawn(move || {
+            // On only once Claude Code is connected; off at once, whatever Claude Code says.
+            let done = if on { claude::set_up(true).and_then(|_| profile::set_claude(true)) } else { profile::set_claude(false).and_then(|_| claude::set_up(false)) };
+            if let Err(e) = done {
+                link.0.0.lock().expect("link lock").errors.push(e);
+            }
+            *slot.lock().expect("claude lock") = ClaudeLink::read();
+        });
     }
 
     fn device(&mut self, ui: &mut Ui) {
@@ -1513,6 +1600,7 @@ impl App {
             "Brightness and game mode are read only until their commands are verified on this keyboard.",
             "A report-rate change is sent when you confirm it, and Loginux reads the rate back, waiting for the keyboard if it reconnects. The keyboard can come back at its own rate after a reconnect, so Loginux sends the rate you chose again then, as G HUB does, and stops if the keyboard drops off right after three of those in ten minutes.",
             "For each change, Loginux switches the keyboard's profile management to host mode, as G HUB does, and back to onboard mode right after.",
+            "The Claude Code switch installs Loginux's plugin in Claude Code and puts Loginux in front of your status line, which still runs as before. Turning it off puts your status line back as it was; if Loginux is uninstalled first, your status line runs on its own.",
         ] {
             body(ui, text, TEXT2, 13.0);
             ui.add_space(6.0);
@@ -3048,22 +3136,22 @@ mod tests {
         assert!(w.app.new_name.is_none(), "Escape leaves too");
 
         let dir = profile::profiles_dir();
-        std::fs::create_dir_all(dir.join("T blocked.toml.tmp")).unwrap(); // in the way of the save
+        std::fs::create_dir_all(profile::staging(&dir.join("T blocked.toml"))).unwrap(); // in the way of the save
         w.click("+ NEW PROFILE");
         w.type_text("T blocked");
         w.click("CREATE");
         assert!(noticed(&w, "T blocked.toml") && w.app.new_name.is_some());
         w.click("CANCEL");
         w.click("OK");
-        std::fs::create_dir_all(dir.join("T names.toml.tmp")).unwrap();
+        std::fs::create_dir_all(profile::staging(&dir.join("T names.toml"))).unwrap();
         w.app.selection = BTreeSet::from([38]);
         w.app.paint_selection([9, 9, 9]);
         w.run(1);
         w.click("SAVE");
         assert!(noticed(&w, "could not save") && w.app.dirty());
         w.click("REVERT");
-        std::fs::remove_dir(dir.join("T blocked.toml.tmp")).unwrap();
-        std::fs::remove_dir(dir.join("T names.toml.tmp")).unwrap();
+        std::fs::remove_dir(profile::staging(&dir.join("T blocked.toml"))).unwrap();
+        std::fs::remove_dir(profile::staging(&dir.join("T names.toml"))).unwrap();
 
         // In use, then deleted: the engine is told to stop using it.
         w.click("USE THIS PROFILE");
@@ -3117,7 +3205,7 @@ mod tests {
         assert!(w.app.closing && w.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
         w.app.closing = false;
         // A save that fails keeps the window open, with the changes.
-        let blocked = profile::profiles_dir().join("T close.toml.tmp");
+        let blocked = profile::staging(&profile::profiles_dir().join("T close.toml"));
         std::fs::create_dir_all(&blocked).unwrap();
         w.close = true;
         w.run(2);
@@ -3241,6 +3329,66 @@ mod tests {
     }
 
     #[test]
+    fn the_claude_code_switch_connects_and_disconnects_claude_code() {
+        let _serial = crate::testenv::serial();
+        let settings = crate::testenv::init().join("claude/settings.json");
+        let log = crate::testenv::claude_cli().join("log");
+        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        std::fs::write(&settings, "{\n  \"statusLine\": {\n    \"command\": \"bash mine.sh\"\n  }\n}\n").unwrap();
+        let _ = std::fs::remove_file(&log);
+        profile::set_claude(false).unwrap();
+        let mut w = Window::open();
+        w.click("SETTINGS");
+        w.run(1);
+        assert_eq!(w.toggled("SHOW ON THE LIGHT BAR"), Some(false), "off until turned on");
+        assert!(w.nodes.iter().any(|n| n.label.starts_with("Off. Turning it on installs")));
+        // The keyboard reaches it too: Tab to the switch, Space turns it on.
+        for _ in 0..60 {
+            if w.focused("SHOW ON THE LIGHT BAR") {
+                break;
+            }
+            w.key(Key::Tab);
+        }
+        assert!(w.focused("SHOW ON THE LIGHT BAR"));
+        w.key(Key::Space);
+        w.run(1);
+        w.until("connected", |w| w.enabled("SHOW ON THE LIGHT BAR") && w.toggled("SHOW ON THE LIGHT BAR") == Some(true));
+        assert!(profile::claude_on());
+        assert!(std::fs::read_to_string(&log).unwrap().contains("plugin install loginux-status"));
+        assert!(std::fs::read_to_string(&settings).unwrap().contains("loginux claude --statusline -- sh -c 'bash mine.sh'"));
+        assert!(w.nodes.iter().any(|n| n.label.starts_with("On, but Loginux's plugin is off")), "the stand-in installs nothing");
+        // Turning it off puts the status line back, and a failure shows as a notice.
+        *w.app.claude.lock().unwrap() = ClaudeLink { changing: Some(false), ..ClaudeLink::read() };
+        w.run(1);
+        assert!(w.has("Disconnecting Claude Code\u{2026}") && !w.enabled("SHOW ON THE LIGHT BAR"), "no clicks while it changes");
+        *w.app.claude.lock().unwrap() = ClaudeLink::read();
+        w.run(1);
+        w.click("SHOW ON THE LIGHT BAR");
+        w.until("disconnected", |w| w.enabled("SHOW ON THE LIGHT BAR") && w.toggled("SHOW ON THE LIGHT BAR") == Some(false));
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), "{\n  \"statusLine\": {\n    \"command\": \"bash mine.sh\"\n  }\n}\n");
+        std::fs::write(crate::testenv::claude_cli().join("fails"), "").unwrap();
+        w.click("SHOW ON THE LIGHT BAR");
+        w.until("the failure is said", |w| noticed(w, "refused for the test"));
+        std::fs::remove_file(crate::testenv::claude_cli().join("fails")).unwrap();
+        w.until("still off", |w| w.enabled("SHOW ON THE LIGHT BAR") && w.toggled("SHOW ON THE LIGHT BAR") == Some(false));
+        assert!(!profile::claude_on(), "on only once Claude Code is connected");
+        // Connected by hand in Claude Code, with the plugin and the status line: said so.
+        profile::set_claude(true).unwrap();
+        std::fs::write(&settings, "{\"enabledPlugins\": {\"loginux-status@loginux\": true}, \"statusLine\": {\"command\": \"loginux claude --statusline\"}}").unwrap();
+        w.click("EDIT");
+        w.click("SETTINGS");
+        w.run(1);
+        assert!(w.has("On: Claude Code's hooks and its status line reach Loginux."));
+        std::fs::write(&settings, "{\"enabledPlugins\": {\"loginux-status@loginux\": true}}").unwrap();
+        w.click("EDIT");
+        w.click("SETTINGS");
+        w.run(1);
+        assert!(w.nodes.iter().any(|n| n.label.starts_with("On, but Claude Code's status line")));
+        profile::set_claude(false).unwrap();
+        std::fs::remove_file(&settings).unwrap();
+    }
+
+    #[test]
     fn a_connected_keyboard_shows_its_state_checks_and_settings() {
         let _serial = crate::testenv::serial();
         forget_claims();
@@ -3264,6 +3412,15 @@ mod tests {
         w.until("the profile is shown", |w| matches!(control(w), Some(Control::Profile { .. })));
         w.run(1);
         assert!(w.has("Showing T live."));
+        // Claude Code's status takes the keyboard from the profile until its session ends.
+        profile::set_claude(true).unwrap();
+        *w.app.claude.lock().unwrap() = ClaudeLink::read();
+        ipc::request(&Request::Claude { session: "s1".into(), signal: crate::claude::Signal::Done, pid: None }).unwrap();
+        w.until("the status is said", |w| w.has(CLAUDE_NOTE));
+        ipc::request(&Request::Claude { session: "s1".into(), signal: crate::claude::Signal::End, pid: None }).unwrap();
+        w.until("the profile again", |w| !w.has(CLAUDE_NOTE));
+        profile::set_claude(false).unwrap();
+        *w.app.claude.lock().unwrap() = ClaudeLink::read();
         kb.state().sw = (1, 5); // another program takes the lighting
         w.until("the conflict shows", |w| matches!(control(w), Some(Control::Conflict { .. })));
         w.run(1);
@@ -3303,7 +3460,7 @@ mod tests {
         assert!(w.has("as expected") && w.has("lit nothing") && w.has("not answered"));
         w.click("CLEAR THESE ANSWERS");
         assert!(strip.iter().all(|id| !w.app.checks.contains_key(id)));
-        let tmp = profile::checks_path(g316()).with_extension("toml.tmp");
+        let tmp = profile::staging(&profile::checks_path(g316()));
         std::fs::create_dir_all(&tmp).unwrap(); // saving answers fails
         w.click("CHECK LIGHT BAR");
         w.click("NOTHING LIT");

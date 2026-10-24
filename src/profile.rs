@@ -2,7 +2,8 @@
 //! Everything lives under $XDG_CONFIG_HOME/loginux (default ~/.config/loginux):
 //!
 //!   profiles/NAME.toml   one profile per file
-//!   config.toml          the profile loginux keeps applied, and the keyboard last seen
+//!   config.toml          the profile loginux keeps applied, the keyboard last seen,
+//!                        and whether Claude Code's status shows on the light bar
 //!   checks/ID.toml       what lit up during channel checks, per keyboard model
 //!   devices/ID.toml      the user's own device definitions (see layout.rs)
 
@@ -277,8 +278,16 @@ pub fn chosen_keyboard() -> Option<String> {
     config_value("keyboard")
 }
 
-fn write_config(profile: Option<&str>, keyboard: Option<&str>) -> Result<(), String> {
-    let mut text = String::from("# Written by Loginux: the profile it keeps applied and the keyboard last seen.\n");
+/// Whether Claude Code's status shows on the light bar: off until the editor's
+/// switch or `loginux claude --enable` writes `claude = true`.
+pub fn claude_on() -> bool {
+    let text = fs::read_to_string(config_dir().join("config.toml")).unwrap_or_default();
+    let doc: toml::Table = text.parse().unwrap_or_default();
+    doc.get("claude").and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+fn write_config(profile: Option<&str>, keyboard: Option<&str>, claude: bool) -> Result<(), String> {
+    let mut text = String::from("# Written by Loginux: the profile it keeps applied, the keyboard last seen,\n# and whether Claude Code's status shows on the light bar.\n");
     if let Some(name) = profile {
         path(name)?;
         text += &format!("profile = \"{name}\"\n");
@@ -286,15 +295,29 @@ fn write_config(profile: Option<&str>, keyboard: Option<&str>) -> Result<(), Str
     if let Some(id) = keyboard.filter(|id| id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c))) {
         text += &format!("keyboard = \"{id}\"\n");
     }
+    if claude {
+        text += "claude = true\n";
+    }
     write_atomic(&config_dir().join("config.toml"), &text)
 }
 
+/// Held while config.toml is read and written again, so two threads changing
+/// different settings at once keep both.
+static CONFIG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn set_active(name: Option<&str>) -> Result<(), String> {
-    write_config(name, chosen_keyboard().as_deref())
+    let _held = CONFIG.lock().unwrap_or_else(|p| p.into_inner());
+    write_config(name, chosen_keyboard().as_deref(), claude_on())
 }
 
 pub fn set_keyboard(id: &str) -> Result<(), String> {
-    write_config(active().as_deref(), Some(id))
+    let _held = CONFIG.lock().unwrap_or_else(|p| p.into_inner());
+    write_config(active().as_deref(), Some(id), claude_on())
+}
+
+pub fn set_claude(on: bool) -> Result<(), String> {
+    let _held = CONFIG.lock().unwrap_or_else(|p| p.into_inner());
+    write_config(active().as_deref(), chosen_keyboard().as_deref(), on)
 }
 
 /// What lit up when loginux lit one zone during a channel check.
@@ -391,10 +414,17 @@ pub fn set_kept_rate(model: &Model, hz: u32) -> Result<(), String> {
     save_rates(model, Some(hz), &load_refused_rates(model))
 }
 
+/// Where `write_atomic` stages `path`: a name for this process, so two
+/// programs saving one file at once, such as the editor and `loginux claude`,
+/// never fill the same temporary file.
+pub fn staging(path: &Path) -> PathBuf {
+    path.with_extension(format!("toml.{}.tmp", std::process::id()))
+}
+
 fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     let dir = path.parent().ok_or("no parent directory")?;
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let tmp = path.with_extension("toml.tmp");
+    let tmp = staging(path);
     fs::write(&tmp, text).and_then(|_| fs::rename(&tmp, path)).map_err(|e| format!("{}: {e}", path.display()))
 }
 
@@ -445,7 +475,8 @@ mod tests {
         p.zones.insert(39, [0, 255, 0]);
         save(m, "T save", &p).unwrap();
         assert_eq!(load(m, "T save").unwrap().zones.len(), 2);
-        assert!(!file.with_extension("toml.tmp").exists());
+        let leftovers = fs::read_dir(profiles_dir()).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".tmp")).count();
+        assert_eq!(leftovers, 0, "no temporary file stays behind");
         delete("T save").unwrap();
         assert!(!list().contains(&"T save".to_string()));
         assert!(load(m, "T save").unwrap_err().contains("T save"));
@@ -463,6 +494,14 @@ mod tests {
         assert!(set_active(Some("../escape")).is_err());
         set_keyboard("bad id!").unwrap(); // an invalid id is dropped, not written
         assert_eq!(chosen_keyboard(), None);
+        // Claude Code's status is off until switched on, and stays on through other changes.
+        assert!(!claude_on());
+        set_claude(true).unwrap();
+        set_active(Some("T chosen")).unwrap();
+        assert!(claude_on() && active().as_deref() == Some("T chosen"));
+        set_claude(false).unwrap();
+        assert!(!claude_on() && active().as_deref() == Some("T chosen"));
+        set_active(None).unwrap();
     }
 
     #[test]
