@@ -184,7 +184,8 @@ gives up on the engine after a second; without an engine running, there is
 nothing to show. Counted from the frames the display draws, a moving share
 sends at most 6 HID++ reports a frame, about 25 a second while Claude thinks,
 nothing between the glints of a finished one, and a sprite at most a full
-frame of 33. Its cost to the service has not been measured on the keyboard yet.
+frame of 33. On a G316 X 98 the service used 0.2 % of one CPU core while a
+share showed a running tool.
 
 LEDs do not show a colour the way a screen does. To change the colours, write
 `~/.config/loginux/claude.toml`; the display reads it at the next event, and a
@@ -431,7 +432,8 @@ sent by hand: each state, three instances sharing the light bar, the spinner,
 question mark, check and cross sprites, and instances closing. Some sprites
 and patterns were retouched after that, and the context walls, the limit lamps
 and the gauges were added; those have run only against the simulated keyboard
-of the tests and in pictures drawn from its frames.
+of the tests and in pictures drawn from its frames. Later that day a Claude
+Code session drove the display through the plugin and its status line.
 [`research/`](../research/README.md) records the evidence and its labels.
 
 ## Credits
