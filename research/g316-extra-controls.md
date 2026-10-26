@@ -72,6 +72,20 @@ Claude Code's compacting pattern on the light bar during a demo. The engine
 logged `Protocol error (os error 71)`, the HID++ interface bound again, and
 the engine reconnected and took the lighting again. Cause not established.
 
+The rate is not the cause (live, 2026-10-26). The kernel logged the same
+disconnects on 2026-10-22 at 18:56, 19:02 and 19:10, at the factory 1000 Hz,
+before Loginux had changed any rate. The owner has seen it drop out before
+Loginux or on another port, and at each drop sees the lighting blank, show a
+startup effect or the default rainbow, then return. The owner has also seen
+other owners of this keyboard report random disconnects (not checked here).
+Wiggling the cable at both ends caused none. Nine more came on 2026-10-26 between 08:44 and 12:44, none
+overnight. The firmware starts its independent watchdog with prescaler 4 and
+reload 2999, a few hundred milliseconds, and feeds it only once per pass of
+its main loop, so a stall of that loop restarts the keyboard (static). The
+loop also does a USB soft disconnect when the controller reports an erratic
+bus error (static). Which of the two fires, and what stalls the loop, is not
+established.
+
 Rate selection is an explicit user action, and a rate is not part of a lighting
 profile. The first plan ruled out any automatic rate write at startup, login or
 replug. Once a reconnect brought the keyboard back at another rate, the owner
