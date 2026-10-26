@@ -83,8 +83,39 @@ between 08:44 and 12:44, none overnight. The firmware starts its independent
 watchdog with prescaler 4 and reload 2999, a few hundred milliseconds, and
 feeds it only once per pass of its main loop, so a stall of that loop
 restarts the keyboard (static). The loop also does a USB soft disconnect when
-the controller reports an erratic bus error (static). Which of the two fires,
-and what stalls the loop, is not established.
+the controller reports an erratic bus error (static).
+
+What stalls the loop is a flash-log compaction erase (static, from the
+firmware image, 2026-10-26). The watchdog is the IWDG at `0x40003000`, unlocked
+with `0x5555`, prescaler index 0 (divide by 4), reload 2999, started with
+`0xcccc`; against a 32-40 kHz LSI that is a 300 to 375 ms timeout. Only two
+places write the `0xaaaa` reload key: boot, and the bottom of the main loop
+`FUN_08011fb0`. So one pass of that loop, including any time an interrupt
+steals from it, must finish inside 375 ms or the keyboard resets.
+
+The loop's settings manager `FUN_080199e0` appends one-byte records (ids
+`0x2db` and `0x2dc`, the active mode or profile byte that `FUN_080149c4`
+reads from `0x2000033d`) to a journaled flash log. The region table at
+`0x080235cc` gives three logs, each two halves: class 0 at `0x08038000`
+(4 KB a half), class 1 at `0x0803a000` (8 KB), class 2 at `0x0803e000`
+(4 KB), and the lighting, game-mode and mode records are class 2. When the
+live half fills, `FUN_08010320` calls `FUN_0801023a`, which erases the other
+half in 2 KB sectors, each erase spinning on the flash-busy bit
+(`FUN_0800ceec`) with no reload key between sectors. A flash erase stalls the
+core, so the loop cannot reach its one reload until the compaction finishes.
+A class 2 compaction erases two sectors, a class 1 compaction four. The same
+record writer is reached from the HID++ timer interrupt `isr_61` by game-mode
+`0x4523/2` and nvconfig `0x8071/3`, so a host write can set off the same
+erase. The save flag lives in the event word at `0x20001df4` that device
+activity sets, which is why the drops come during use and not when idle: an
+idle keyboard appends nothing, so its log never fills and never compacts.
+
+The clean drops (`os error 19`, a full re-enumeration) match a watchdog reset
+of the whole chip; the `os error 71` drops match the separate soft-disconnect
+on a bus error, not a loop stall. Not settled from the image alone: the erase
+time per sector, so whether a given compaction actually crosses the 375 ms
+budget needs a measurement on the device, which would mean driving flash
+writes on the hardware and is not done.
 
 Rate selection is an explicit user action, and a rate is not part of a lighting
 profile. The first plan ruled out any automatic rate write at startup, login or
