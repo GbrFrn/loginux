@@ -1,6 +1,6 @@
 [package]
 name = "loginux"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2024"
 description = "RGB lighting for Logitech HID++ keyboards and mice on Linux"
 license = "MIT OR Apache-2.0"
