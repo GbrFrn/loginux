@@ -55,6 +55,10 @@ const RATE_GIVE_UP: Duration = Duration::from_secs(20);
 const RESTORES: usize = 3;
 const RESTORE_WINDOW: Duration = Duration::from_secs(600);
 const RESTORE_SETTLE: Duration = Duration::from_secs(60);
+/// udev hands a new hidraw node to the session shortly after the node appears,
+/// so a keyboard that has just come back can refuse to open for a moment. A
+/// refusal is retried quietly this long before it is reported as a missing rule.
+const ACCESS_GRACE: Duration = Duration::from_secs(5);
 
 pub fn install_signal_handlers() {
     extern "C" fn on_signal(_: libc::c_int) {
@@ -379,6 +383,8 @@ struct Engine {
     restored: Option<Instant>,
     /// When the keyboard dropped off soon after such a send, within RESTORE_WINDOW.
     dropped: Vec<Instant>,
+    /// When opening the keyboard's node began to be refused (permission denied).
+    denied: Option<Instant>,
     /// The profile choice last read from config.toml (inner None: onboard
     /// lighting), so a change made anywhere is announced once; None until the
     /// first read, which is not announced.
@@ -483,6 +489,7 @@ impl Engine {
             rate_change: None,
             restored: None,
             dropped: vec![],
+            denied: None,
             chosen: None,
             claude: claude::Display::default(),
             redraw: false,
@@ -822,18 +829,33 @@ impl Engine {
     }
 
     fn connect(&mut self) {
-        if let Err(e) = Keyboard::find(self.opts.device.as_deref(), self.model).and_then(|kb| self.link_up(kb)) {
-            self.device = match &e {
-                Error::NotFound => Device::Missing,
-                Error::Access(..) => Device::NoAccess { error: e.to_string() },
-                _ => Device::Failed { error: e.to_string() },
-            };
-            if !matches!(e, Error::NotFound) {
-                self.say(&e.to_string());
-            }
-            let wait = if matches!(e, Error::NotFound) { Duration::from_secs(1) } else { Duration::from_secs(3) };
-            self.retry_at = Instant::now() + wait;
+        let now = Instant::now();
+        let Err(e) = Keyboard::find(self.opts.device.as_deref(), self.model).and_then(|kb| self.link_up(kb)) else {
+            self.denied = None;
+            return;
+        };
+        // A refusal younger than ACCESS_GRACE is the keyboard still arriving: wait
+        // for udev on the next tick instead of blaming the rule.
+        let refused = matches!(&e, Error::Access(_, io) if io.kind() == io::ErrorKind::PermissionDenied);
+        if !refused {
+            self.denied = None;
         }
+        let arriving = refused && now - *self.denied.get_or_insert(now) < ACCESS_GRACE;
+        self.device = match &e {
+            Error::NotFound => Device::Missing,
+            _ if arriving => Device::Missing,
+            Error::Access(..) => Device::NoAccess { error: e.to_string() },
+            _ => Device::Failed { error: e.to_string() },
+        };
+        if !matches!(e, Error::NotFound) && !arriving {
+            self.say(&e.to_string());
+        }
+        let wait = match e {
+            _ if arriving => Duration::ZERO,
+            Error::NotFound => Duration::from_secs(1),
+            _ => Duration::from_secs(3),
+        };
+        self.retry_at = now + wait;
     }
 
     /// Reads what the engine needs from a newly opened device and makes it the link.
@@ -1968,6 +1990,27 @@ mod tests {
         let mut e = Engine::new(Options { device: Some("/dev/fake-connect".into()), refresh: None }, false);
         e.connect();
         assert!(e.link.is_some() && matches!(&e.device, Device::Connected { path, .. } if path == "/dev/fake-connect"));
+    }
+
+    #[test]
+    fn a_node_udev_has_not_handed_over_yet_is_waited_for_quietly() {
+        // A keyboard back from a reset (2026-10-26 12:42:58): its node refused to
+        // open for a moment, and the engine blamed the udev rule and waited 3 s.
+        let locked = crate::testenv::init().join("locked-node");
+        fs::write(&locked, "").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        if File::open(&locked).is_ok() { return; } // root opens it anyway: nothing to wait for
+        let mut e = Engine::new(Options { device: Some(locked), refresh: None }, false);
+        e.connect();
+        assert!(matches!(e.device, Device::Missing) && e.message.is_none(), "refused just now: still arriving");
+        assert!(e.retry_at <= Instant::now(), "tried again on the next tick");
+        e.connect();
+        assert!(e.message.is_none(), "the grace runs from the first refusal");
+        e.denied = e.denied.map(|t| t - ACCESS_GRACE);
+        e.connect();
+        assert!(matches!(&e.device, Device::NoAccess { error } if error.contains("udev rule")));
+        assert!(e.message.as_deref().is_some_and(|m| m.contains("udev rule")), "a lasting refusal is reported");
+        assert!(e.retry_at > Instant::now() + Duration::from_secs(2), "and retried at the usual pace");
     }
 
     #[test]
